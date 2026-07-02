@@ -1,0 +1,40 @@
+plugins {
+    id 'java-library'
+}
+
+def javaVersion = property('javaVersion').toInteger()
+def ignitionVersion = property('ignitionVersion')
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(javaVersion)
+    }
+}
+
+dependencies {
+    compileOnly "com.inductiveautomation.ignitionsdk:ignition-common:${ignitionVersion}"
+    compileOnly "com.inductiveautomation.ignitionsdk:gateway-api:${ignitionVersion}"
+    compileOnly "com.inductiveautomation.ignitionsdk:perspective-common:${ignitionVersion}"
+    compileOnly "com.inductiveautomation.ignitionsdk:perspective-gateway:${ignitionVersion}"
+    compileOnly project(':base')
+    compileOnly project(':common')
+
+    modlImplementation project(':web-ui')
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.3'
+    testCompileOnly "com.inductiveautomation.ignitionsdk:ignition-common:${ignitionVersion}"
+    testCompileOnly "com.inductiveautomation.ignitionsdk:gateway-api:${ignitionVersion}"
+    testRuntimeOnly "com.inductiveautomation.ignitionsdk:ignition-common:${ignitionVersion}"
+    testRuntimeOnly "com.inductiveautomation.ignitionsdk:gateway-api:${ignitionVersion}"
+    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+}
+
+tasks.withType(Jar).configureEach {
+    manifest {
+        attributes 'Implementation-Version': project.version
+    }
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+}

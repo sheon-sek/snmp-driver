@@ -1,0 +1,283 @@
+{
+  "general": {
+    "common": {
+      "unavailable": "Nicht verfügbar"
+    },
+    "actions": {
+      "backToHome": "Zur Startseite",
+      "cancel": "Abbrechen",
+      "refresh": "Aktualisieren",
+      "refreshing": "Wird aktualisiert...",
+      "saveChanges": "Änderungen speichern"
+    },
+    "errors": {
+      "requestFailed": "Anfrage fehlgeschlagen"
+    },
+    "controls": {
+      "copyCode": "Code kopieren",
+      "language": {
+        "trigger": "Sprache ändern",
+        "english": "Englisch",
+        "simplifiedChinese": "Vereinfachtes Chinesisch"
+      },
+      "theme": {
+        "trigger": "Design ändern",
+        "dark": "Dunkel",
+        "light": "Hell",
+        "system": "System"
+      }
+    },
+    "auth": {
+      "fields": {
+        "message": "Nachricht",
+        "source": "Quelle",
+        "status": "Status",
+        "unknownUser": "Unbekannter Benutzer",
+        "user": "Benutzer"
+      },
+      "guard": {
+        "loadingSession": "Sitzung wird geladen..."
+      },
+      "loginRequired": {
+        "title": "Anmeldung erforderlich",
+        "message": "Anmeldung erforderlich",
+        "description": "Ihre aktuelle Gateway-Sitzung ist nicht authentifiziert. Melden Sie sich an und aktualisieren Sie danach die Seite."
+      },
+      "sessionError": {
+        "title": "Sitzung kann nicht geladen werden",
+        "message": "Sitzung kann nicht geladen werden",
+        "description": "Authentifizierungsprüfung fehlgeschlagen. Aktualisieren Sie die Seite oder prüfen Sie die Antwortdetails unten.",
+        "responseDetails": "Antwortdetails"
+      },
+      "userDenied": {
+        "title": "Zugriff verweigert",
+        "description": "Der aktuelle Benutzer verfügt nicht über die erforderlichen Berechtigungen für diese Seite.",
+        "missingPermissions": "Fehlende Berechtigungen"
+      }
+    },
+    "layout": {
+      "app": {
+        "titleFallback": "App-Titel",
+        "subtitleFallback": "App-Beschreibung"
+      },
+      "navigation": {
+        "groups": {
+          "general": "Allgemein",
+          "setting": "Einstellungen"
+        },
+        "routes": {
+          "home": {
+            "label": "Startseite",
+            "breadcrumb": "Startseite"
+          },
+          "dummy": {
+            "label": "Dummy",
+            "breadcrumb": "Dummy"
+          },
+          "dummySubpage1": {
+            "label": "Unterseite 1",
+            "breadcrumb": "Unterseite 1"
+          },
+          "dummySubpage2": {
+            "label": "Unterseite 2",
+            "breadcrumb": "Unterseite 2"
+          },
+          "settings": {
+            "label": "Einstellungen",
+            "breadcrumb": "Einstellungen"
+          },
+          "settingsPermissions": {
+            "label": "Berechtigungssteuerung",
+            "breadcrumb": "Berechtigungssteuerung"
+          }
+        }
+      },
+      "sidebar": {
+        "navigationHidden": "Navigation ausgeblendet.",
+        "noNavigation": "Keine Navigation"
+      },
+      "topPanel": {
+        "fallback": {
+          "home": "Startseite",
+          "path": "{{path}}"
+        }
+      },
+      "footer": {
+        "health": {
+          "title": "Gateway-Verbindung",
+          "errorFallback": "Health-Anfrage fehlgeschlagen",
+          "rows": {
+            "apiBaseUrl": "API-Basis-URL",
+            "error": "Fehler",
+            "moduleName": "Modulname",
+            "moduleVersion": "Modulversion",
+            "status": "Status"
+          },
+          "status": {
+            "loading": {
+              "label": "Prüfung läuft...",
+              "description": "Gateway-Backend-Prüfung läuft"
+            },
+            "connected": {
+              "label": "Gateway verbunden",
+              "description": "Gateway-Backend erreichbar"
+            },
+            "error": {
+              "label": "Gateway getrennt",
+              "description": "Gateway-Backend nicht erreichbar"
+            }
+          }
+        }
+      }
+    }
+  },
+  "permissionControlPage": {
+    "title": "Berechtigungssteuerung",
+    "description": "Konfigurieren Sie Rollenberechtigungen für Anwendungsberechtigungen.",
+    "actions": {
+      "configure": "Konfigurieren"
+    },
+    "catalog": {
+      "authorizationManage": {
+        "label": "Authorization:Manage",
+        "description": "Modulrollen-/Sicherheitsstufenberechtigungen bearbeiten"
+      }
+    },
+    "dialog": {
+      "description": "Berechtigungen für {{rolePath}} umschalten.",
+      "roleFallback": "diese Rolle",
+      "titleFallback": "Rollenberechtigungen"
+    },
+    "empty": {
+      "title": "Keine Rollen gefunden",
+      "description": "Security/Levels Authenticated/Roles hat keine Rollen zurückgegeben."
+    },
+    "errors": {
+      "loadTitle": "Berechtigungen können nicht geladen werden",
+      "saveFailed": "Berechtigungskonfiguration konnte nicht gespeichert werden"
+    },
+    "roles": {
+      "enabledCount": "{{count}} aktiviert"
+    },
+    "selfLockWarning": "Ihre letzte authorization.manage-Rolle kann nicht entfernt werden.",
+    "toasts": {
+      "keepAuthorizationRole": "Behalten Sie eine weitere authorization.manage-Rolle, bevor Sie diese deaktivieren.",
+      "saved": "Berechtigungskonfiguration gespeichert"
+    }
+  },
+  "homePage": {
+    "title": "Ignition SDK-Boilerplate",
+    "description": "Ein formaler Ausgangspunkt für Gateway-Seiten, Perspective-Komponenten, authentifizierte API-Routen und modulbereite Frontend-Workflows.",
+    "render-perspective": "Über die Perspective-Beispielkomponente gerendert.",
+    "render-gateway": "Als Gateway-Navigationsseite gerendert.",
+    "common": {
+      "unknown": "unbekannt"
+    },
+    "badges": {
+      "starter": "Ignition 8.3-Modulstarter",
+      "renderPath": "{{mode}}-Renderpfad"
+    },
+    "renderMode": {
+      "gateway": "Gateway",
+      "perspective": "Perspective"
+    },
+    "status": {
+      "checking": "Prüfung läuft...",
+      "connected": "Verbunden ({{version}})",
+      "disconnected": "Getrennt ({{error}})"
+    },
+    "errors": {
+      "healthCheckFailed": "Health-Check fehlgeschlagen"
+    },
+    "metrics": {
+      "gateway": {
+        "label": "Gateway",
+        "online": "Online",
+        "offline": "Offline",
+        "version": "Version {{version}}",
+        "checking": "Health-Route wird geprüft."
+      },
+      "actor": {
+        "label": "Akteur",
+        "fallback": "Sitzung",
+        "loaded": "{{source}}-Quelle, {{count}} Rollen",
+        "unavailable": "Aktueller Benutzer-Endpunkt nicht verfügbar.",
+        "waiting": "Warten auf authentifizierten Akteur."
+      },
+      "permissions": {
+        "label": "Berechtigungen",
+        "description": "Aktivierte Modulberechtigungen für den aktuellen Akteur."
+      }
+    },
+    "liveContract": {
+      "title": "Live-Modulvertrag",
+      "description": "Basisdaten, die über die Gateway-Health- und Auth-Routen sichtbar sind.",
+      "healthRoute": "Health-Route",
+      "connected": "Verbunden",
+      "failed": "Fehlgeschlagen",
+      "checking": "Prüfung läuft"
+    },
+    "actions": {
+      "manualFetch": "Manuell abrufen",
+      "autoRefresh": "Automatisch aktualisieren"
+    },
+    "mechanism": {
+      "eyebrow": "Funktionsweise",
+      "title": "Modul-Anfragepfad vom Gateway zur UI",
+      "description": "Das Boilerplate hält Backend-Verträge, Frontend-Routen und Perspective-Rendering so nah beieinander, dass man schnell lernen kann, ohne die echten Modulgrenzen zu verbergen.",
+      "gatewayHook": {
+        "title": "Gateway-Hook",
+        "description": "Initialisiert Dienste, bindet API-Routen ein und registriert die Moduloberfläche."
+      },
+      "apiRoutes": {
+        "title": "API-Routen",
+        "description": "Stellt Health- und Auth-Verträge unter dem Modul-Datenendpunkt bereit."
+      },
+      "reactShell": {
+        "title": "React-Shell",
+        "description": "Führt die Gateway-Seite mit Routing, Design, Query-Cache und Navigation aus."
+      },
+      "perspectiveEmbed": {
+        "title": "Perspective-Einbettung",
+        "description": "Verwendet das Web-Bundle innerhalb einer Perspective-Beispielkomponente erneut."
+      }
+    },
+    "guides": {
+      "eyebrow": "Entwicklerhandbuch",
+      "title": "Erste nützliche Schritte",
+      "description": "Diese Einstiegspunkte decken Build, Frontend-Iteration und Erweiterung gesicherter Seiten ab, ohne die Vorlage in ein Framework zu verwandeln.",
+      "moduleBuild": {
+        "title": "Modul-Build ausführen",
+        "description": "Alle Gradle-Scopes bauen und die unsignierte Entwicklungs-.modl erzeugen."
+      },
+      "webUi": {
+        "title": "Web-UI starten",
+        "description": "Den Vite-Entwicklungsserver ausführen, während Gateway-Seiteninteraktionen erstellt werden."
+      },
+      "securedPage": {
+        "title": "Gesicherte Seite hinzufügen",
+        "description": "Eine Route hinzufügen, sie mit Berechtigungsmetadaten verknüpfen und die Shell den Zugriff filtern lassen."
+      }
+    },
+    "features": {
+      "eyebrow": "Enthaltene Oberflächen",
+      "title": "Erweiterbare Boilerplate-Bausteine",
+      "gatewayFoundation": {
+        "title": "Gateway-Seitenfundament",
+        "description": "React 18, Vite, shadcn/ui-Primitives, Designunterstützung und Route-Tree-Navigation."
+      },
+      "perspectivePath": {
+        "title": "Perspective-Komponentenpfad",
+        "description": "Die Beispielkomponentenverdrahtung zeigt, wie dasselbe Modul innerhalb von Perspective erscheinen kann."
+      },
+      "authPermissions": {
+        "title": "Authentifizierung und Berechtigungen",
+        "description": "Gateway- und Perspective-Akteurauflösung mit Modulberechtigungsverträgen."
+      },
+      "apiStarter": {
+        "title": "API-Starterkit",
+        "description": "Typisierte Health-/Auth-Clients mit RTK Query-Wrappern, bereit für weitere Endpunkte."
+      }
+    }
+  }
+}

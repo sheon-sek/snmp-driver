@@ -1,0 +1,78 @@
+import com.github.gradle.node.yarn.task.YarnTask
+import com.github.gradle.node.npm.task.NpmTask
+
+plugins {
+    id 'java'
+    id 'com.github.node-gradle.node' version '7.0.2'
+}
+
+// Define a variable that describes the path to the generated resources folder.
+ext.projectOutput = "$buildDir/generated-resources/"
+
+// Configure Node, NPM, and Yarn versions used by Gradle.
+node {
+    version.set('20.12.2')
+    yarnVersion.set('1.22.18')
+    npmVersion.set('10.5.0')
+    download.set(true)
+    nodeProjectDir.set(file(project.projectDir))
+}
+
+// Install npm/yarn dependencies.
+def yarnPackages = tasks.register('yarnPackages', YarnTask) {
+    description = "Executes 'yarn' at the root of the web-ui/ directory to install npm dependencies for the yarn workspace."
+
+    args.set(['install'])
+
+    inputs.files(
+        fileTree(project.projectDir).matching {
+            include '**/package.json', '**/yarn.lock'
+        }
+    )
+
+    outputs.dirs(
+        file('node_modules')
+    )
+
+    dependsOn "${project.path}:yarn", ':web-ui:npmSetup'
+}
+
+// Run Vite build.
+def viteBuild = tasks.register('viteBuild', NpmTask) {
+    group = 'Ignition Module'
+    description = "Runs 'npm run build', executing the Vite build script of the web project's root package.json"
+
+    args.set(['run', 'build'])
+
+    dependsOn yarnPackages
+
+    inputs.files(
+        project.fileTree(project.projectDir).matching {
+            exclude '**/.gradle/**',
+                    '**/build/**',
+                    '**/node_modules/**',
+                    '**/dist/**',
+                    '**/.awcache/**',
+                    '**/yarn-error.log'
+        }
+    )
+
+    outputs.files(
+        fileTree(projectOutput)
+    )
+}
+
+tasks.named('processResources') {
+    dependsOn viteBuild, yarnPackages
+}
+
+// Make sure the gateway project doesn't process resources until the Vite build is done.
+findProject(':gateway')?.tasks?.named('processResources')?.configure {
+    dependsOn viteBuild
+}
+
+sourceSets {
+    main {
+        output.dir(projectOutput, builtBy: viteBuild)
+    }
+}

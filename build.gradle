@@ -1,0 +1,70 @@
+plugins {
+    id("base")
+    id("io.ia.sdk.modl") version("0.1.1")
+}
+
+allprojects {
+    group = property("moduleId")
+    version = property("moduleVersion")
+}
+
+def purgeStaleModuleArtifacts = tasks.register("purgeStaleModuleArtifacts") {
+    outputs.upToDateWhen { false }
+
+    doLast {
+        subprojects.each { subproject ->
+            def expectedJarName = "${subproject.name}-${subproject.version}.jar"
+            def libsDir = subproject.layout.buildDirectory.dir("libs").get().asFile
+
+            libsDir.listFiles()
+                ?.findAll { it.isFile() && it.extension == "jar" }
+                ?.findAll { it.name != expectedJarName }
+                ?.each { it.delete() }
+        }
+
+        layout.buildDirectory.dir("moduleContent").get().asFile
+            .listFiles()
+            ?.findAll { it.isFile() && it.extension == "jar" }
+            ?.each { it.delete() }
+    }
+}
+
+tasks.matching {
+    it.name in ["assembleModlStructure", "writeModuleXml", "zipModule"]
+}.configureEach {
+    dependsOn(purgeStaleModuleArtifacts)
+    outputs.upToDateWhen { false }
+}
+
+ignitionModule {
+    requiredIgnitionVersion = property('ignitionVersion')
+
+    id = property('moduleId')
+    name = property('moduleName')
+    moduleVersion = property('moduleVersion')
+    moduleDescription = property('moduleDescription')
+
+    fileName = "${property('moduleId')}-${property('moduleVersion')}.modl"
+    license = 'license.html'
+
+    skipModlSigning.set(true)
+
+    projectScopes.putAll([
+            ':base'    : 'G',
+            ':common'   : 'GCD',
+            ':gateway'  : 'G',
+            ':designer' : 'D',
+            ':web-ui'   : 'G',
+    ])
+
+    moduleDependencies.set([
+            'com.inductiveautomation.perspective': 'DG',
+    ])
+
+    def gatewayHookClass = "${property('moduleId')}.gateway.GatewayHook".toString()
+    def designerHookClass = "${property('moduleId')}.designer.DesignerHook".toString()
+    hooks.putAll([
+        (gatewayHookClass) : 'G',
+        (designerHookClass) : 'D',
+    ])
+}

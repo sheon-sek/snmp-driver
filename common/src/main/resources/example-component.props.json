@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "apiBase": {
+      "type": "string",
+      "default": "/data/ignition-sdk-boilerplate/api/v1",
+      "description": "Gateway API base URL used by the example component. Leave it as default unless you have a specific reason to change it."
+    },
+    "locale": {
+      "type": "string",
+      "default": "en-US",
+      "description": "Locale used by the example component. Please bind with 'locale' property of the session props to ensure synchronization with the Ignition session locale."
+    },
+    "theme": {
+      "type": "string",
+      "default": "Light-Mode",
+      "enum": ["Dark-Mode", "Light-Mode"],
+      "description": "Theme used by the example component. Please bind with 'theme' property of the session props to ensure synchronization with the Ignition session theme."
+    }
+  }
+}

@@ -1,0 +1,283 @@
+{
+  "general": {
+    "common": {
+      "unavailable": "No disponible"
+    },
+    "actions": {
+      "backToHome": "Volver al inicio",
+      "cancel": "Cancelar",
+      "refresh": "Actualizar",
+      "refreshing": "Actualizando...",
+      "saveChanges": "Guardar cambios"
+    },
+    "errors": {
+      "requestFailed": "Error en la solicitud"
+    },
+    "controls": {
+      "copyCode": "Copiar código",
+      "language": {
+        "trigger": "Cambiar idioma",
+        "english": "Inglés",
+        "simplifiedChinese": "Chino simplificado"
+      },
+      "theme": {
+        "trigger": "Cambiar tema",
+        "dark": "Oscuro",
+        "light": "Claro",
+        "system": "Sistema"
+      }
+    },
+    "auth": {
+      "fields": {
+        "message": "Mensaje",
+        "source": "Origen",
+        "status": "Estado",
+        "unknownUser": "Usuario desconocido",
+        "user": "Usuario"
+      },
+      "guard": {
+        "loadingSession": "Cargando sesión..."
+      },
+      "loginRequired": {
+        "title": "Inicio de sesión requerido",
+        "message": "Inicio de sesión requerido",
+        "description": "La sesión actual de Gateway no está autenticada. Actualice después de iniciar sesión."
+      },
+      "sessionError": {
+        "title": "No se puede cargar la sesión",
+        "message": "No se puede cargar la sesión",
+        "description": "La comprobación de autenticación falló. Actualice la página o revise los detalles de la respuesta a continuación.",
+        "responseDetails": "Detalles de la respuesta"
+      },
+      "userDenied": {
+        "title": "Acceso denegado",
+        "description": "El usuario actual no tiene los permisos requeridos para esta página.",
+        "missingPermissions": "Permisos faltantes"
+      }
+    },
+    "layout": {
+      "app": {
+        "titleFallback": "Título de la app",
+        "subtitleFallback": "Descripción de la app"
+      },
+      "navigation": {
+        "groups": {
+          "general": "General",
+          "setting": "Configuración"
+        },
+        "routes": {
+          "home": {
+            "label": "Inicio",
+            "breadcrumb": "Inicio"
+          },
+          "dummy": {
+            "label": "Dummy",
+            "breadcrumb": "Dummy"
+          },
+          "dummySubpage1": {
+            "label": "Subpágina 1",
+            "breadcrumb": "Subpágina 1"
+          },
+          "dummySubpage2": {
+            "label": "Subpágina 2",
+            "breadcrumb": "Subpágina 2"
+          },
+          "settings": {
+            "label": "Configuración",
+            "breadcrumb": "Configuración"
+          },
+          "settingsPermissions": {
+            "label": "Control de permisos",
+            "breadcrumb": "Control de permisos"
+          }
+        }
+      },
+      "sidebar": {
+        "navigationHidden": "Navegación oculta.",
+        "noNavigation": "Sin navegación"
+      },
+      "topPanel": {
+        "fallback": {
+          "home": "Inicio",
+          "path": "{{path}}"
+        }
+      },
+      "footer": {
+        "health": {
+          "title": "Conexión de Gateway",
+          "errorFallback": "Error en la solicitud de estado",
+          "rows": {
+            "apiBaseUrl": "URL base de la API",
+            "error": "Error",
+            "moduleName": "Nombre del módulo",
+            "moduleVersion": "Versión del módulo",
+            "status": "Estado"
+          },
+          "status": {
+            "loading": {
+              "label": "Comprobando...",
+              "description": "Comprobación del backend de Gateway en curso"
+            },
+            "connected": {
+              "label": "Gateway conectado",
+              "description": "Backend de Gateway accesible"
+            },
+            "error": {
+              "label": "Gateway desconectado",
+              "description": "Backend de Gateway no accesible"
+            }
+          }
+        }
+      }
+    }
+  },
+  "permissionControlPage": {
+    "title": "Control de permisos",
+    "description": "Configure las autorizaciones de rol para los permisos de la aplicación.",
+    "actions": {
+      "configure": "Configurar"
+    },
+    "catalog": {
+      "authorizationManage": {
+        "label": "Authorization:Manage",
+        "description": "Editar permisos de rol/nivel de seguridad del módulo"
+      }
+    },
+    "dialog": {
+      "description": "Alternar permisos asignados a {{rolePath}}.",
+      "roleFallback": "este rol",
+      "titleFallback": "Permisos del rol"
+    },
+    "empty": {
+      "title": "No se encontraron roles",
+      "description": "Security/Levels Authenticated/Roles no devolvió ningún rol."
+    },
+    "errors": {
+      "loadTitle": "No se pueden cargar los permisos",
+      "saveFailed": "No se pudo guardar la configuración de permisos"
+    },
+    "roles": {
+      "enabledCount": "{{count}} habilitados"
+    },
+    "selfLockWarning": "No se puede eliminar su último rol authorization.manage.",
+    "toasts": {
+      "keepAuthorizationRole": "Mantenga otro rol authorization.manage antes de deshabilitar este.",
+      "saved": "Configuración de permisos guardada"
+    }
+  },
+  "homePage": {
+    "title": "Plantilla base de Ignition SDK",
+    "description": "Un punto de partida formal para páginas de Gateway, componentes de Perspective, rutas de API autenticadas y flujos de frontend listos para módulos.",
+    "render-perspective": "Renderizado mediante el componente de ejemplo de Perspective.",
+    "render-gateway": "Renderizado como una página de navegación de Gateway.",
+    "common": {
+      "unknown": "desconocido"
+    },
+    "badges": {
+      "starter": "Inicio de módulo para Ignition 8.3",
+      "renderPath": "Ruta de renderizado {{mode}}"
+    },
+    "renderMode": {
+      "gateway": "Gateway",
+      "perspective": "Perspective"
+    },
+    "status": {
+      "checking": "Comprobando...",
+      "connected": "Conectado ({{version}})",
+      "disconnected": "Desconectado ({{error}})"
+    },
+    "errors": {
+      "healthCheckFailed": "Error en la comprobación de estado"
+    },
+    "metrics": {
+      "gateway": {
+        "label": "Gateway",
+        "online": "En línea",
+        "offline": "Sin conexión",
+        "version": "Versión {{version}}",
+        "checking": "Se está comprobando la ruta de estado."
+      },
+      "actor": {
+        "label": "Actor",
+        "fallback": "Sesión",
+        "loaded": "Origen {{source}}, {{count}} roles",
+        "unavailable": "El endpoint del usuario actual no está disponible.",
+        "waiting": "Esperando un actor autenticado."
+      },
+      "permissions": {
+        "label": "Permisos",
+        "description": "Permisos de módulo habilitados para el actor actual."
+      }
+    },
+    "liveContract": {
+      "title": "Contrato de módulo en vivo",
+      "description": "Datos base visibles desde las rutas de estado y autenticación de Gateway.",
+      "healthRoute": "Ruta de estado",
+      "connected": "Conectado",
+      "failed": "Fallido",
+      "checking": "Comprobando"
+    },
+    "actions": {
+      "manualFetch": "Obtención manual",
+      "autoRefresh": "Actualización automática"
+    },
+    "mechanism": {
+      "eyebrow": "Cómo funciona",
+      "title": "Ruta de solicitud del módulo desde Gateway hasta la UI",
+      "description": "La plantilla base mantiene los contratos del backend, las rutas del frontend y el renderizado de Perspective lo suficientemente cerca para aprender rápido sin ocultar los límites reales del módulo.",
+      "gatewayHook": {
+        "title": "Hook de Gateway",
+        "description": "Inicializa servicios, monta rutas de API y registra la superficie del módulo."
+      },
+      "apiRoutes": {
+        "title": "Rutas de API",
+        "description": "Expone contratos de estado y autenticación bajo el endpoint de datos del módulo."
+      },
+      "reactShell": {
+        "title": "Shell de React",
+        "description": "Ejecuta la página de Gateway con enrutamiento, tema, caché de consultas y navegación."
+      },
+      "perspectiveEmbed": {
+        "title": "Integración de Perspective",
+        "description": "Reutiliza el paquete web dentro de un componente de ejemplo de Perspective."
+      }
+    },
+    "guides": {
+      "eyebrow": "Guía para desarrolladores",
+      "title": "Primeros pasos útiles",
+      "description": "Estos puntos de entrada cubren la compilación, la iteración del frontend y la expansión de páginas seguras sin convertir la plantilla en un framework.",
+      "moduleBuild": {
+        "title": "Ejecutar la compilación del módulo",
+        "description": "Compila todos los scopes de Gradle y genera el .modl de desarrollo sin firmar."
+      },
+      "webUi": {
+        "title": "Iniciar la Web UI",
+        "description": "Ejecuta el servidor de desarrollo de Vite mientras se crean interacciones de la página de Gateway."
+      },
+      "securedPage": {
+        "title": "Agregar una página segura",
+        "description": "Agregue una ruta, vincúlela a metadatos de permisos y permita que el shell filtre el acceso."
+      }
+    },
+    "features": {
+      "eyebrow": "Interfaces incluidas",
+      "title": "Piezas de la plantilla base listas para extender",
+      "gatewayFoundation": {
+        "title": "Base de página de Gateway",
+        "description": "React 18, Vite, primitivos de shadcn/ui, soporte de temas y navegación por árbol de rutas."
+      },
+      "perspectivePath": {
+        "title": "Ruta del componente Perspective",
+        "description": "El cableado del componente de ejemplo muestra cómo el mismo módulo puede aparecer dentro de Perspective."
+      },
+      "authPermissions": {
+        "title": "Autenticación y permisos",
+        "description": "Resolución de actores de Gateway y Perspective con contratos de permisos de módulo."
+      },
+      "apiStarter": {
+        "title": "Kit de inicio de API",
+        "description": "Clientes tipados de estado/autenticación con wrappers de RTK Query listos para más endpoints."
+      }
+    }
+  }
+}

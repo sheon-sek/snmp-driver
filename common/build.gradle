@@ -1,0 +1,16 @@
+plugins {
+    id 'java-library'
+}
+
+java {
+    toolchain {
+        languageVersion.set(org.gradle.jvm.toolchain.JavaLanguageVersion.of(property("javaVersion").toInteger()))
+    }
+}
+
+dependencies {
+    // add common scoped dependencies here
+    compileOnly "com.inductiveautomation.ignitionsdk:ignition-common:${property("ignitionVersion")}"
+    compileOnly "com.inductiveautomation.ignitionsdk:gateway-api:${property("ignitionVersion")}"
+    compileOnly "com.inductiveautomation.ignitionsdk:perspective-common:${property("ignitionVersion")}"
+}
