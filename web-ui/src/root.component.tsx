@@ -1,4 +1,4 @@
 import { createRoot } from 'react-dom/client';
-import { WebApp } from './index';
+import { IgnitionSdkBoilerplate } from './index';
 
-createRoot(document.getElementById('root')!).render(<WebApp/>);
+createRoot(document.getElementById('root')!).render(<IgnitionSdkBoilerplate/>);

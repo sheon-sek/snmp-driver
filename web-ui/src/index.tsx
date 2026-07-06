@@ -18,7 +18,7 @@ export interface WebAppProps {
   theme?: string;
 }
 
-export function WebApp({
+export function IgnitionSdkBoilerplate({
   apiBase = import.meta.env.VITE_API_BASE_URL,
   locale,
   theme,
@@ -44,4 +44,4 @@ export function WebApp({
   );
 }
 
-export default WebApp;
+export default IgnitionSdkBoilerplate;

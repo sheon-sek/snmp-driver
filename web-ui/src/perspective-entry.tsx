@@ -7,7 +7,7 @@ import {
   PropertyTree,
   SizeObject,
 } from '@inductiveautomation/perspective-client';
-import { WebApp } from './index';
+import { IgnitionSdkBoilerplate } from './index';
 import { setEmbedMode, setPerspectiveSessionContext } from '@/embedContext';
 import { defaultLanguage } from '@/i18n';
 
@@ -33,7 +33,7 @@ export class ExampleComponent extends Component<
 
     return (
       <div {...emit({ classes: ['eetarp-perspective-root'] })}>
-        <WebApp apiBase={props.apiBase} locale={props.locale} theme={props.theme} />
+        <IgnitionSdkBoilerplate apiBase={props.apiBase} locale={props.locale} theme={props.theme} />
       </div>
     );
   }

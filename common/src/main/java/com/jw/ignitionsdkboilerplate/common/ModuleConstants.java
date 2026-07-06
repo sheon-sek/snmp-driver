@@ -5,7 +5,7 @@ public final class ModuleConstants {
     public static final String MODULE_NAME = "Ignition SDK Boilerplate";
 
     public static final String MODULE_WEBAPP_GW_FILENAME = "ignitionSdkBoilerplate.js";
-    public static final String MODULE_WEBAPP_GW_COMPONENT_NAME = "WebApp";
+    public static final String MODULE_WEBAPP_GW_COMPONENT_NAME = "IgnitionSdkBoilerplate";
     public static final String MODULE_WEBAPP_GW_NAV_CAREGORY_ID = "ignition-sdk-boilerplate";
     public static final String MODULE_WEBAPP_GW_NAV_PATH = "/ignition-sdk-boilerplate";
     public static final String MODULE_WEBAPP_GW_NAV_PAGENAME = "Home";
