@@ -435,7 +435,7 @@ sidebar 会递归过滤当前用户无权限访问的 navigation item。
 
 `ShadowBoundary` 把 app 渲染进 shadow root：
 
-- 注入 `src/index.css`
+- 注入 `src/global.css`
 - 注入 sonner styles
 - 注入 vaul styles
 - 创建 portal root
