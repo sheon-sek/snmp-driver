@@ -24,10 +24,35 @@ public final class AppAuthConfig {
         return c;
     }
 
+    public AppAuthConfig copy() {
+        AppAuthConfig copy = new AppAuthConfig();
+        copy.version = version;
+        copy.revision = revision;
+        copy.superAdminRoles = new LinkedHashSet<>(getSuperAdminRoles());
+        copy.superAdminSecurityLevels = new LinkedHashSet<>(getSuperAdminSecurityLevels());
+        copy.permissions = new LinkedHashMap<>();
+        for (Map.Entry<String, Set<String>> entry : getPermissions().entrySet()) {
+            Set<String> authorities = entry.getValue();
+            copy.permissions.put(
+                    entry.getKey(),
+                    authorities == null ? new LinkedHashSet<>() : new LinkedHashSet<>(authorities)
+            );
+        }
+        return copy;
+    }
+
     public void normalize(AppAuthOptions options) {
-        if(superAdminRoles == null) superAdminRoles = new LinkedHashSet<>();
-        if(superAdminSecurityLevels == null) superAdminSecurityLevels = new LinkedHashSet<>();
-        if(permissions == null) permissions = new LinkedHashMap<>();
+        superAdminRoles = new LinkedHashSet<>(getSuperAdminRoles());
+        superAdminSecurityLevels = new LinkedHashSet<>(getSuperAdminSecurityLevels());
+        Map<String, Set<String>> sourcePermissions = getPermissions();
+        permissions = new LinkedHashMap<>();
+        for (Map.Entry<String, Set<String>> entry : sourcePermissions.entrySet()) {
+            Set<String> authorities = entry.getValue();
+            permissions.put(
+                    entry.getKey(),
+                    authorities == null ? new LinkedHashSet<>() : new LinkedHashSet<>(authorities)
+            );
+        }
 
         superAdminRoles.addAll(options.superAdminRoles());
         superAdminSecurityLevels.addAll(options.superAdminSecurityLevels());
@@ -39,7 +64,6 @@ public final class AppAuthConfig {
             permissions.computeIfAbsent(key, ignored -> new LinkedHashSet<>());
         }
 
-        permissions.computeIfAbsent(options.authorizationManagePermissionKey(), ignored -> new LinkedHashSet<>());
         permissions.get(options.authorizationManagePermissionKey()).addAll(admins);
 
         // Drop unknown permission keys. This makes old configs safe after code changes.
@@ -51,8 +75,8 @@ public final class AppAuthConfig {
     }
 
     public void validate(AppAuthOptions options) {
-        for (String key : permissions.keySet()) {
-            if(!options.permissionKeys().contains(key)) {
+        for (String key : getPermissions().keySet()) {
+            if (!options.permissionKeys().contains(key)) {
                 throw new IllegalArgumentException("Unknown permission key: " + key);
             }
         }
@@ -60,7 +84,7 @@ public final class AppAuthConfig {
 
     public boolean isAllowed(AppAuthContext user, String permissionKey) {
         if (user.isSuperAdmin(this)) return true;
-        Set<String> allowed = permissions.getOrDefault(permissionKey, Set.of());
+        Set<String> allowed = getPermissions().getOrDefault(permissionKey, Set.of());
         for (String authority : user.authorities()) {
             if (allowed.contains(authority)) return true;
         }

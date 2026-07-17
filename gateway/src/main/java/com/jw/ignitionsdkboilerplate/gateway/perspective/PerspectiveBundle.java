@@ -24,30 +24,28 @@ public final class PerspectiveBundle extends AbstractBundle {
                 PerspectiveContext.get(context),
                 "Perspective context is unavailable"
         );
-        componentRegistry = Objects.requireNonNull(
+        ComponentRegistry registry = Objects.requireNonNull(
                 perspectiveContext.getComponentRegistry(),
                 "Perspective component registry is unavailable"
         );
-        registerComponents();
+        registerComponents(registry);
+        componentRegistry = registry;
         componentsRegistered = true;
     }
 
     @Override
     protected void shutdownProcess() {
-        try {
-            if (componentsRegistered && componentRegistry != null) {
-                unregisterComponents();
-            }
-        } finally {
-            componentsRegistered = false;
-            componentRegistry = null;
-            context = null;
+        if (componentsRegistered && componentRegistry != null) {
+            unregisterComponents();
         }
+        componentsRegistered = false;
+        componentRegistry = null;
+        context = null;
     }
 
-    private void registerComponents() {
+    private void registerComponents(ComponentRegistry registry) {
         logger.info("Registering perspective components...");
-        componentRegistry.registerComponent(ExampleWebApp.DESCRIPTOR);
+        registry.registerComponent(ExampleWebApp.DESCRIPTOR);
     }
 
     private void unregisterComponents() {

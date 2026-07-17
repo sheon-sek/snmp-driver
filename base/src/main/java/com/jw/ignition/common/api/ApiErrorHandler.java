@@ -23,8 +23,8 @@ public final class ApiErrorHandler {
     }
 
     public static Object error(RequestContext request, HttpServletResponse response, Throwable error) {
-        if (error instanceof ApiException) {
-            return response.isCommitted() ? null : ApiResponses.error(response, error);
+        if (error instanceof ApiException apiException) {
+            return response.isCommitted() ? null : ApiResponses.error(response, apiException);
         }
 
         String correlationId = UUID.randomUUID().toString();

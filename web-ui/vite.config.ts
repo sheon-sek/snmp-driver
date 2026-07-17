@@ -13,6 +13,13 @@ function isModuleTarget(value: string): value is ModuleTarget {
   return Object.prototype.hasOwnProperty.call(moduleTargets, value);
 }
 
+function toStyleId(libName: string) {
+  const kebabName = libName
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase();
+  return `${kebabName}-styles`;
+}
+
 export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, rootDir, "");
 
@@ -33,7 +40,13 @@ export default defineConfig(({ command, mode }) => {
   return {
     envPrefix: "VITE_",
 
-    plugins: [react(), inlineCssIntoUmd(target.entryFilename, "eetarp-styles")],
+    plugins: [
+      react(),
+      inlineCssIntoUmd(
+        target.entryFilename,
+        toStyleId(target.libName),
+      ),
+    ],
 
     resolve: {
       alias: {
@@ -43,7 +56,7 @@ export default defineConfig(({ command, mode }) => {
 
     build: {
       outDir: path.resolve(rootDir, "build/generated-resources/mounted"),
-      emptyOutDir: false,
+      emptyOutDir: process.env.APP_EMPTY_OUT_DIR === "true",
       sourcemap: false,
       minify: false,
       target: "es2020",

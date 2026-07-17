@@ -40,7 +40,7 @@ import { getApiErrorMessage } from "@/lib/api";
 import { useCurrentUser } from "../../query/auth";
 import { useHealth } from "../../query/health";
 import { cn } from "@/lib/utils";
-import { isPerspectiveEmbed } from "@/embedContext";
+import { useApiRuntime } from "@/embedContext";
 import { Separator } from "@/components/ui/separator";
 
 type FeatureItem = {
@@ -125,7 +125,8 @@ export default function HomePage() {
     ? Object.values(currentUser.data.permissions).filter(Boolean).length
     : 0;
   const { t } = useTranslation();
-  const renderMode = isPerspectiveEmbed()
+  const { embedMode } = useApiRuntime();
+  const renderMode = embedMode === "perspective"
     ? t("homePage.renderMode.perspective")
     : t("homePage.renderMode.gateway");
 

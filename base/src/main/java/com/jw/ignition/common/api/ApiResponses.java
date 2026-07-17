@@ -7,9 +7,8 @@ import com.jw.ignition.common.util.Json;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.time.Instant;
-import java.util.UUID;
 
-public class ApiResponses {
+public final class ApiResponses {
     private ApiResponses() {}
 
     public static JsonObject ok(Object data) {
@@ -20,7 +19,7 @@ public class ApiResponses {
     }
     public static JsonObject ok(Object data, Object meta) {
         JsonObject body = ok(data);
-        if(meta != null) {
+        if (meta != null) {
             body.add("meta", toJsonElement(meta));
         }
         return body;
@@ -29,18 +28,14 @@ public class ApiResponses {
     public static JsonObject error(HttpServletResponse response, int status, String code, String message) {
         return error(response, status, code, message, null);
     }
-    public static JsonObject error(HttpServletResponse response, Throwable error) {
-        if (error instanceof  ApiException apiException) {
-            return error(
-                    response,
-                    apiException.status(),
-                    apiException.code(),
-                    safeMessage(apiException.getMessage(), "Request failed."),
-                    apiException.details()
-            );
-        }
-
-        return internalError(response, UUID.randomUUID().toString());
+    public static JsonObject error(HttpServletResponse response, ApiException error) {
+        return error(
+                response,
+                error.status(),
+                error.code(),
+                safeMessage(error.getMessage(), "Request failed."),
+                error.details()
+        );
     }
     public static JsonObject internalError(HttpServletResponse response, String correlationId) {
         return error(
@@ -84,7 +79,7 @@ public class ApiResponses {
         body.addProperty("success", false);
         body.add("error", error);
         body.addProperty("timestamp", Instant.now().toString());
-        if(correlationId != null && !correlationId.isBlank()) {
+        if (correlationId != null && !correlationId.isBlank()) {
             body.addProperty("correlationId", correlationId);
         }
         return body;
@@ -104,9 +99,9 @@ public class ApiResponses {
                 response,
                 HttpServletResponse.SC_UNAUTHORIZED,
                 "UNAUTHENTICATED",
-                message.isBlank() ? "Authentication required." : message
+                safeMessage(message, "Authentication required.")
         );
-    };
+    }
     public static JsonObject unauthenticated(HttpServletResponse response) {
         return unauthenticated(response, "");
     }
@@ -116,9 +111,9 @@ public class ApiResponses {
                 response,
                 HttpServletResponse.SC_FORBIDDEN,
                 "UNAUTHORIZED",
-                message.isBlank() ? "Access denied." : message
+                safeMessage(message, "Access denied.")
         );
-    };
+    }
     public static JsonObject unauthorized(HttpServletResponse response) {
         return unauthorized(response, "");
     }

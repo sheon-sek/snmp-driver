@@ -2,7 +2,7 @@
 
 Ignition 8.3 module 开发用 boilerplate。它不是空模板，而是已经带有 Gateway Web UI、Perspective component、统一 API 响应、共享 auth/permission 框架、React shell、route-tree 导航、Shadow DOM 样式隔离、RTK Query API 层和 shadcn/ui 组件集的起点。
 
-当前代码中有历史拼写 `ignition-sdk-boilerplate`。这是 repo truth，已用于 mount alias、API base、导航路径、auth namespace、package name 等位置。重命名项目时必须统一处理，不能只改显示名。
+`ignition-sdk-boilerplate` 是当前统一项目标识，已用于 mount alias、API base、auth namespace 和 frontend package。重命名项目时必须统一处理，不能只改显示名。
 
 ## Tech Stack
 
@@ -53,7 +53,6 @@ ignition-sdk-boilerplate/
   gateway/
   designer/
   web-ui/
-  docs/superpowers/
 ```
 
 ### `base`
@@ -67,6 +66,8 @@ ignition-sdk-boilerplate/
   - `ApiResponses`
 - `com.jw.ignition.common.util`
   - `Json`
+- `com.jw.ignition.common.service`
+  - bundle/service 共用生命周期状态机
 - `com.jw.ignition.auth`
   - auth namespace
   - auth route registrar
@@ -84,8 +85,8 @@ Ignition Gateway / Designer / Perspective 共用常量和 component descriptor�
 
 - `ModuleConstants.java`
 - `PerspectiveComponents.java`
-- `component/ExampleComponent.java`
-- `resources/example-component.props.json`
+- `component/ExampleWebApp.java`
+- `resources/example-webapp.props.json`
 
 当前模块 ID：
 
@@ -132,17 +133,17 @@ React + Vite frontend。它同时服务两个入口：
 关键目录：
 
 ```text
-web-ui/src/app
-web-ui/src/components/auth
 web-ui/src/components/common
 web-ui/src/components/foundation
-web-ui/src/components/layout
 web-ui/src/components/ui
 web-ui/src/i18n
 web-ui/src/lib/api
 web-ui/src/lib/query
 web-ui/src/lib/types
-web-ui/src/pages
+web-ui/src/packages/page
+web-ui/src/packages/perspective
+web-ui/src/packages/webapp
+web-ui/src/packages/widget
 web-ui/src/store
 ```
 
@@ -153,13 +154,13 @@ web-ui/src/store
 Gateway hook 注册 SystemJS module：
 
 ```text
-/res/ignition-sdk-boilerplate/ignitionSdkBoilerplate.js
+/res/ignition-sdk-boilerplate/webapp.js
 ```
 
 Gateway nav path：
 
 ```text
-/ignition-sdk-boilerplate
+/ignition-sdk-boilerplate/webapp
 ```
 
 前端入口：
@@ -179,19 +180,19 @@ web-ui/vite.config.ts
 Component ID：
 
 ```text
-com.jw.ignitionsdkboilerplate.example
+ignitionboilerplate.example-webapp
 ```
 
 前端入口：
 
 ```text
-web-ui/src/perspective-entry.tsx
+web-ui/src/packages/perspective/example-webapp-wrapper/index.tsx
 ```
 
 Vite config：
 
 ```text
-web-ui/vite.config.perspective.ts
+web-ui/vite.config.ts
 ```
 
 Perspective props schema：
@@ -257,6 +258,10 @@ GET  /authorization/security-level-roles
 ```
 
 前端 `baseApi` 会 unwrap `success/data`，并把非标准错误 normalize 成 `ApiErrorResponse`。
+
+Auth config update 使用 revision optimistic concurrency：无效 payload 返回 `400 INVALID_AUTH_CONFIG`；旧 revision 返回 `409 REVISION_CONFLICT` 和 current/expected revision details。
+
+Authorization config GET routes 使用 Ignition `WebUiSessionAccessControl`；两个 POST routes 使用 `CsrfWebUiSessionAccessControl`。前端在 mutation 前从 `/data/app/session` 读取当前 session 的 token，并通过 `x-csrf-token` header 提交。`OPEN_ROUTE` 只用于仍需兼容自定义 Gateway/Perspective identity guard 的 routes。
 
 ## Custom Mechanisms
 
@@ -342,6 +347,8 @@ authorization.manage
 health.access
 ```
 
+`AuthCore` cache 不直接暴露 mutable config。读写 API 都经过 deep-copy boundary；保存后 caller 无法绕过 revision/persistence 修改 cached config。
+
 ### 3. Gateway Web UI + Perspective Identity
 
 Gateway Web UI：
@@ -365,7 +372,7 @@ X-EEAUTH-Project
 
 ### 4. Frontend Dynamic API Base
 
-`web-ui/src/embedContext.ts` 持有 runtime context：
+`web-ui/src/embedContext.ts` 定义每个 app instance 独立的 runtime context：
 
 - embed mode: `standalone` / `perspective`
 - Perspective session context
@@ -375,18 +382,20 @@ X-EEAUTH-Project
 
 ```ts
 apiBase?: string
+embedMode?: "standalone" | "perspective"
 locale?: string
 theme?: string
+perspectiveSession?: PerspectiveSessionContext
 ```
 
-`baseApi` 每次请求用 `getApiBase()` 拼接 URL。
+每个 `WebApp` / widget instance 创建自己的 Redux store。RTK Query 通过 thunk `extraArgument` 读取该 instance 的 API base/session；不同 Perspective component 不共享 mutable request context 或 query cache。request scope 改变时重建 instance/store，避免旧 endpoint cache 被新 session 复用。
 
 ### 5. Route Tree Drives Routes + Navigation
 
 主配置：
 
 ```text
-web-ui/src/app/appRoutes.tsx
+web-ui/src/packages/webapp/app/appRoutes.tsx
 ```
 
 它同时生成：
@@ -466,6 +475,9 @@ app-state-storage
 
 Theme provider 会把 `data-theme`、`class`、`lang` 写到 shadow app root。
 
+每个 `AppProvider` 创建独立 i18next instance，避免多个 embedded component 的 locale 互相覆盖。
+每个 `AppProvider` 也使用独立 Sonner toaster ID，toast 不会广播到其他 embedded instance。
+
 支持语言：
 
 ```text
@@ -477,7 +489,7 @@ de-DE
 es-ES
 ```
 
-### 9. Vite Dual-Bundle Build
+### 9. Vite Multi-Target Build
 
 `web-ui/package.json`：
 
@@ -485,12 +497,16 @@ es-ES
 yarn run build
 ```
 
-实际执行：
+`scripts/build-embedded.mts` 逐个构建 `moduleTargets` 中的所有 target：
 
 ```text
-vite build --mode embedded
-vite build --mode embedded --config vite.config.perspective.ts
+webapp
+widget
+page
+perspective
 ```
+
+首个 target 会清空 generated output，后续 target 追加，避免已移除或重命名的旧 bundle 被重新打包。
 
 输出目录：
 
@@ -498,19 +514,18 @@ vite build --mode embedded --config vite.config.perspective.ts
 web-ui/build/generated-resources/mounted
 ```
 
-Gateway bundle：
+输出 bundle：
 
 ```text
-ignitionSdkBoilerplate.js
-```
-
-Perspective bundle：
-
-```text
-ignitionSdkBoilerplatePerspective.js
+webapp.js
+widget.js
+page.js
+perspective.js
 ```
 
 `vite.inline-css.ts` 会把 Vite 输出 CSS inline 到 UMD chunk，并从 Rollup bundle 中移除 CSS asset。它不删除磁盘文件。
+
+`page` 是独立页面 target，不包含 webapp 的 router/sidebar/application shell。每个页面放在 `web-ui/src/packages/page/<page-name>` 独立 subfolder，可由 Gateway mount，或由 Perspective wrapper 复用。默认 counter 位于 `web-ui/src/packages/page/counter`；`page.js` 将它导出为 `IgnitionSdkBoilerplatePage`，Gateway 挂载路径为 `/ignition-sdk-boilerplate/counter`。Gateway 或 Perspective host 负责 React root，page package 本身不调用 `createRoot`。
 
 ## Quick Start
 
@@ -538,13 +553,13 @@ Default dev URL:
 http://localhost:9999
 ```
 
-当前 `.env.dev` 中 `VITE_API_BASE_URL` 指向：
+当前 `.env.dev` 中 `VITE_API_BASE_URL` 指向本地开发占位路径：
 
 ```text
-/data/ignition-sdk-template/api/v1
+/data/dev/api/v1
 ```
 
-如本 repo 独立运行，应检查是否需要改为：
+需要连接已安装 Gateway module 时，改为：
 
 ```text
 /data/ignition-sdk-boilerplate/api/v1
@@ -555,7 +570,7 @@ http://localhost:9999
 需要构建时运行：
 
 ```powershell
-.\gradlew.bat --no-daemon --console plain clean build
+.\gradlew.bat --no-daemon --console plain build
 ```
 
 Gradle 会先构建 `web-ui`，再打包 module。
@@ -563,7 +578,7 @@ Gradle 会先构建 `web-ui`，再打包 module。
 当前 module fileName 配置：
 
 ```text
-com.jw.ignitionsdkboilerplate-1.0.7-beta13.modl
+com.jw.ignitionsdkboilerplate-1.1.0-beta5.modl
 ```
 
 `skipModlSigning` 为 `true`，因此这是开发用未签名模块，不是生产签名 artifact。
@@ -597,9 +612,9 @@ yarn --cwd "D:\EETARP\01_Projects\_IgnitionEngineeringTools\tutorials\ignition-s
 
 ### Add a secured page
 
-1. 在 `web-ui/src/pages/<Domain>/<Page>/index.tsx` 新增页面。
-2. 在 `web-ui/src/pages/index.ts` export。
-3. 在 `web-ui/src/app/appRoutes.tsx` 新增 route。
+1. 在 `web-ui/src/packages/webapp/pages/<Domain>/<Page>/index.tsx` 新增页面。
+2. 在 `web-ui/src/packages/webapp/pages/index.ts` export。
+3. 在 `web-ui/src/packages/webapp/app/appRoutes.tsx` 新增 route。
 4. 用 `requiredPermissions` 声明权限。
 5. 确认 i18n key 加到所有 locale JSON。
 
@@ -641,8 +656,8 @@ npx shadcn@3.8.5 add <component>
 
 ### Add Perspective props
 
-1. 修改 `common/src/main/resources/example-component.props.json`。
-2. 修改 `web-ui/src/perspective-entry.tsx` 的 `ExampleComponentProps`。
+1. 修改 `common/src/main/resources/example-webapp.props.json`。
+2. 修改 `web-ui/src/packages/perspective/example-webapp-wrapper/index.tsx` 的 `ExampleWebAppProps`。
 3. 修改 `getPropsReducer(...)`。
 4. 必要时传入 `WebApp`。
 5. 如影响 API base/session/theme/language，检查 `embedContext.ts` 和 `ThemeProvider.tsx`。
@@ -675,18 +690,14 @@ npx shadcn@3.8.5 add <component>
 - `ModuleConstants.java`
   - `MODULE_ID`
   - `MODULE_NAME`
-  - `MODULE_WEBAPP_GW_FILENAME`
-  - `MODULE_WEBAPP_GW_COMPONENT_NAME`
-  - `MODULE_WEBAPP_GW_NAV_CAREGORY_ID`
-  - `MODULE_WEBAPP_GW_NAV_PATH`
-  - `MODULE_WEBAPP_GW_NAV_PAGENAME`
-  - `MODULE_WEBAPP_P_FILENAME`
-  - `MODULE_WEBAPP_P_COMPONENT_CATEGORY`
   - `MOUNT_ALIAS`
+  - `API_PREFIX`
   - `GATEWAY_NAV_CATEGORY_ID`
+  - `WebPackages`
 - `AuthConstants.java`
   - `AUTH_NAMESPACE`
-- `ExampleComponent.java`
+  - `PERSISTENCE_PREFIX`
+- `ExampleWebApp.java`
   - `COMPONENT_ID`
   - `COMPONENT_NAME`
   - default meta name
@@ -697,42 +708,52 @@ npx shadcn@3.8.5 add <component>
 
 - `web-ui/package.json`
   - `name`
-- `web-ui/.env.embedded`
-  - `APP_GW_ENTRY_FILENAME`
-  - `APP_GW_LIB_NAME`
-  - `APP_GW_LIB_ENTRY`
-  - `APP_P_ENTRY_FILENAME`
-  - `APP_P_LIB_NAME`
-  - `APP_P_LIB_ENTRY`
-  - `VITE_API_BASE_URL`
-  - `VITE_PERSPECTIVE_COMPONENT_TYPE`
+  - `version`
+- `web-ui/scripts/build-targets.mts`
+  - API base
+  - output filename
+  - UMD library name
+  - source entry
 - `web-ui/.env.dev`
   - `VITE_API_BASE_URL`
 - `web-ui/index.html`
-  - demo component attributes
-- `web-ui/src/perspective-entry.tsx`
-  - component type env usage
+  - dev mount root
+- `web-ui/src/packages/perspective/example-webapp-wrapper/index.tsx`
+  - component type and props reducer
 - `web-ui/src/i18n/locales/*/common.json`
   - app title and copy
 
 ### URLs and IDs
 
-Current historical values to replace consistently:
+Current values to replace consistently:
 
 ```text
 ignition-sdk-boilerplate
-ignitionSdkBoilerplate
-ignitionSdkBoilerplatePerspective
+IgnitionSdkBoilerplateWebApp
+IgnitionSdkBoilerplateWidget
+IgnitionSdkBoilerplatePage
+IgnitionSdkBoilerplatePerspective
 com.jw.ignitionsdkboilerplate
-com.jw.ignitionsdkboilerplate.example
+ignitionboilerplate.example-webapp
 Ignition SDK Boilerplate
 ```
 
-Also search typo-correct spelling separately:
+## Long-running Acceptance Gate
 
-```text
-ignition-sdk-boilerplate
-```
+静态设计边界：
+
+- Gateway 失败路径反向 rollback；service shutdown 可重试。
+- Perspective/Designer component 在 shutdown unregister。
+- 每个 React root 独立拥有 Redux store、i18n、toast 和 API runtime context。
+- listener、timer、polling subscription 随组件 unmount 清理；页面隐藏时停止 health polling。
+- Shadow DOM 全局 primitives 最多保留一个 style node；Perspective instance 不写 standalone preferences。
+
+发布前仍必须在目标 Gateway 留证，不能用静态审查替代：
+
+1. 连续 100 次 module restart：导航页和 Perspective component 各只有一个注册项。
+2. 连续 1,000 次 Perspective component mount/unmount：DOM node、listener、RTK subscription 不单调增长。
+3. 24 小时 polling soak：强制 GC 后 heap 回到稳定区间；无持续增长、OOM 或 classloader retention。
+4. soak 前后保存 auth config：revision、CSRF、role permission 行为保持一致。
 
 ## Development Principles
 
@@ -751,8 +772,7 @@ ignition-sdk-boilerplate
 
 ## Known Current Notes
 
-- Historical spelling `bolierplate` is still active in route/package/env values.
-- `.env.dev` currently points API base at `ignition-sdk-template`, while embedded mode points at `ignition-sdk-boilerplate`.
+- `.env.dev` uses `/data/dev/api/v1`; embedded builds inject `/data/ignition-sdk-boilerplate/api/v1`.
 - `RouteGuard` bypasses auth checks in Vite dev mode through `import.meta.env.DEV`.
 - `lint` means TypeScript validation only.
 - Build output is development unsigned `.modl` because signing is skipped.

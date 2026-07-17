@@ -5,11 +5,7 @@ import {
   fetchBaseQuery,
   FetchBaseQueryError,
 } from "@reduxjs/toolkit/query/react";
-import {
-  getPerspectiveSessionContext,
-  isPerspectiveEmbed,
-  getApiBase,
-} from "@/embedContext";
+import type { ApiRuntimeContext } from "@/embedContext";
 import { ApiErrorResponse, ApiResponse } from "../types";
 import { SerializedError } from "@reduxjs/toolkit";
 
@@ -49,16 +45,18 @@ export type BaseApi = ReturnType<typeof createBaseApi>;
 
 const rawBaseQuery = fetchBaseQuery({
   credentials: "include",
-  prepareHeaders: (headers) => {
-    if (isPerspectiveEmbed()) {
-      const sessionContext = getPerspectiveSessionContext();
+  prepareHeaders: async (headers, { arg, extra }) => {
+    const runtime = runtimeContext(extra);
+    const session = runtime.perspectiveSession;
+    if (session?.sessionId) {
+      headers.set("X-EEAUTH-Session-Id", session.sessionId);
+    }
+    if (session?.projectName) {
+      headers.set("X-EEAUTH-Project", session.projectName);
+    }
 
-      if (sessionContext?.sessionId) {
-        headers.set("X-EEAUTH-Session-Id", sessionContext.sessionId);
-      }
-      if (sessionContext?.projectName) {
-        headers.set("X-EEAUTH-Project", sessionContext.projectName);
-      }
+    if (runtime.embedMode === "standalone" && isUnsafeRequest(arg)) {
+      headers.set("x-csrf-token", await fetchCsrfToken(runtime.apiBase));
     }
 
     return headers;
@@ -70,7 +68,7 @@ const dynamicQuery: BaseQueryFn<
   unknown,
   ApiErrorResponse
 > = async (args, api, extraOptions) => {
-  const baseUrl = getApiBase();
+  const baseUrl = runtimeContext(api.extra).apiBase;
 
   const adjustedArgs =
     typeof args === "string"
@@ -101,12 +99,50 @@ const dynamicQuery: BaseQueryFn<
 
   return result;
 };
+
+function runtimeContext(value: unknown): ApiRuntimeContext {
+  if (
+    value &&
+    typeof value === "object" &&
+    "apiBase" in value &&
+    typeof value.apiBase === "string"
+  ) {
+    return value as ApiRuntimeContext;
+  }
+  return { apiBase: "", embedMode: "standalone" };
+}
+
 function joinUrl(baseUrl: string, path: string) {
   const normalizedBase = baseUrl.replace(/\/+$/, "");
   const normalizedPath = path.replace(/^\/+/, "");
 
   return `${normalizedBase}/${normalizedPath}`;
 }
+
+function isUnsafeRequest(arg: string | FetchArgs) {
+  const method = typeof arg === "string" ? "GET" : (arg.method ?? "GET");
+  return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
+}
+
+async function fetchCsrfToken(apiBase: string) {
+  const apiUrl = new URL(apiBase || "/", window.location.href);
+  const response = await fetch(new URL("/data/app/session", apiUrl), {
+    credentials: "include",
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Unable to load CSRF token: HTTP ${response.status}`);
+  }
+
+  const session = (await response.json()) as { csrfToken?: unknown };
+  if (typeof session.csrfToken !== "string" || !session.csrfToken) {
+    throw new Error("Unable to load CSRF token: missing csrfToken");
+  }
+
+  return session.csrfToken;
+}
+
 function normalizeApiErrorResponse(
   error: FetchBaseQueryError,
 ): ApiErrorResponse {

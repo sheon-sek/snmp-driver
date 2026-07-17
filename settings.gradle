@@ -61,7 +61,6 @@ enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 rootProject.name = providers.gradleProperty('rootProjectName').get()
 include(
-        ":",
         ":base",
         ":common",
         ":gateway",

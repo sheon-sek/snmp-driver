@@ -1,10 +1,12 @@
 package com.jw.ignition.auth.core;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.Objects;
 import java.util.Set;
 
-public class AppAuthContext {
+public final class AppAuthContext {
     private final AppAuthSource source;
     private final String username;
     private final Set<String> roles;
@@ -19,8 +21,12 @@ public class AppAuthContext {
             Collection<String> securityLevels,
             Collection<String> claims
     ) {
-        this.source = source;
-        this.username = username == null || username.isBlank() ? "unknown" : username;
+        this.source = Objects.requireNonNull(source, "source");
+        String normalizedUsername = username == null ? "" : username.trim();
+        if (normalizedUsername.isEmpty()) {
+            throw new IllegalArgumentException("username cannot be blank");
+        }
+        this.username = normalizedUsername;
         this.roles = clean(roles);
         this.securityLevels = clean(securityLevels);
         this.claims = clean(claims);
@@ -46,11 +52,12 @@ public class AppAuthContext {
 
     private static Set<String> clean(Collection<String> values) {
         LinkedHashSet<String> out = new LinkedHashSet<>();
-        if (values == null) return out;
-        for (String value : values) {
-            if (value != null && !value.isBlank()) out.add(value.trim());
+        if (values != null) {
+            for (String value : values) {
+                if (value != null && !value.isBlank()) out.add(value.trim());
+            }
         }
-        return out;
+        return Collections.unmodifiableSet(out);
     }
 
     private static Set<String> buildAuthorities(Set<String> roles, Set<String> levels, Set<String> claims) {
@@ -58,6 +65,6 @@ public class AppAuthContext {
         for (String role : roles) out.add(AuthCore.roleAuthority(role));
         for (String level : levels) out.add("securityLevel:" + level);
         for (String claim : claims) out.add("claim:" + claim);
-        return out;
+        return Collections.unmodifiableSet(out);
     }
 }

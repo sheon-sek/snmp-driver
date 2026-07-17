@@ -29,7 +29,7 @@
   "include": [
     "src",
     "vite.config.ts",
-    "scripts/vite.inline-css.ts"
+    "scripts"
   ],
   "exclude": [
     "node_modules",

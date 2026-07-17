@@ -97,17 +97,22 @@ export function CodeSnippet({
     };
   }, [formattedCode, language]);
 
+  React.useEffect(() => {
+    if (!copied) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timeoutId);
+  }, [copied]);
+
   function handleCopy() {
     copyTextToClipboard(formattedCode)
       .then(() => {
         setCopied(true);
-
-        window.setTimeout(() => {
-            setCopied(false);
-        }, 1500);
       })
       .catch(() => {
-          setCopied(false);
+        setCopied(false);
       });
   }
 
@@ -159,7 +164,7 @@ export function CodeSnippet({
         />
       ) : (
         <pre className="max-h-[520px] overflow-auto bg-muted p-4 text-sm">
-          <code className="font-mono text-[13px] leading-relaxed bg-current">
+          <code className="bg-transparent font-mono text-[13px] leading-relaxed">
             {formattedCode}
           </code>
         </pre>

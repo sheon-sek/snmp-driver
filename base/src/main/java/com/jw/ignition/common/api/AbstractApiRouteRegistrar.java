@@ -10,13 +10,13 @@ import com.jw.ignition.auth.core.AuthCore;
 import com.jw.ignition.common.util.Json;
 
 public abstract class AbstractApiRouteRegistrar {
-    protected final ApiErrorHandler errorHandler;
-    protected final AuthFilter authFilter;
+    private final ApiErrorHandler errorHandler;
+    private final AuthFilter authFilter;
     protected final AuthCore auth;
-    protected final String routePrefix;
+    private final String routePrefix;
 
-    public AbstractApiRouteRegistrar(GatewayContext context, AuthCore auth, String routePrefix) {
-        this.auth  = auth;
+    protected AbstractApiRouteRegistrar(GatewayContext context, AuthCore auth, String routePrefix) {
+        this.auth = auth;
         this.routePrefix = routePrefix;
 
         authFilter = new AuthFilter(context, auth);
@@ -29,17 +29,48 @@ public abstract class AbstractApiRouteRegistrar {
         RouteGroup routes,
         HttpMethod method,
         String path,
-        Boolean requireAuthenticated,
+        boolean requireAuthenticated,
         String permissionKey,
         RouteHandler handler
     ) {
-        mount(routes, method, path, RouteGroup.TYPE_JSON, requireAuthenticated, permissionKey, handler);
+        json(
+                routes,
+                AccessControlStrategy.OPEN_ROUTE,
+                method,
+                path,
+                requireAuthenticated,
+                permissionKey,
+                handler
+        );
     }
+
     protected void json(RouteGroup routes, HttpMethod method, String path, RouteHandler handler) {
         json(routes, method, path, false, "", handler);
     }
+
+    protected void json(
+            RouteGroup routes,
+            AccessControlStrategy accessControl,
+            HttpMethod method,
+            String path,
+            boolean requireAuthenticated,
+            String permissionKey,
+            RouteHandler handler
+    ) {
+        mount(
+                routes,
+                accessControl,
+                method,
+                path,
+                RouteGroup.TYPE_JSON,
+                requireAuthenticated,
+                permissionKey,
+                handler
+        );
+    }
+
     protected void json(RouteGroup routes, AccessControlStrategy accessControl, HttpMethod method, String path, RouteHandler handler) {
-        mount(routes, accessControl, method, path, RouteGroup.TYPE_JSON, handler);
+        json(routes, accessControl, method, path, false, "", handler);
     }
 
     protected void binary(
@@ -50,17 +81,49 @@ public abstract class AbstractApiRouteRegistrar {
         String permissionKey,
         RouteHandler handler
     ) {
-        mount(routes, method, path, RouteGroup.TYPE_OCTET_STREAM, requireAuthenticated, permissionKey, handler);
+        binary(
+                routes,
+                AccessControlStrategy.OPEN_ROUTE,
+                method,
+                path,
+                requireAuthenticated,
+                permissionKey,
+                handler
+        );
     }
+
     protected void binary(RouteGroup routes, HttpMethod method, String path, RouteHandler handler) {
         binary(routes, method, path, false, "", handler);
     }
+
+    protected void binary(
+            RouteGroup routes,
+            AccessControlStrategy accessControl,
+            HttpMethod method,
+            String path,
+            boolean requireAuthenticated,
+            String permissionKey,
+            RouteHandler handler
+    ) {
+        mount(
+                routes,
+                accessControl,
+                method,
+                path,
+                RouteGroup.TYPE_OCTET_STREAM,
+                requireAuthenticated,
+                permissionKey,
+                handler
+        );
+    }
+
     protected void binary(RouteGroup routes, AccessControlStrategy accessControl, HttpMethod method, String path, RouteHandler handler) {
-        mount(routes, accessControl, method, path, RouteGroup.TYPE_OCTET_STREAM, handler);
+        binary(routes, accessControl, method, path, false, "", handler);
     }
 
     protected void mount(
             RouteGroup routes,
+            AccessControlStrategy accessControl,
             HttpMethod method,
             String path,
             String type,
@@ -70,42 +133,21 @@ public abstract class AbstractApiRouteRegistrar {
     ) {
         RouteGroup.RouteMounter mounter = routes.newRoute(routePrefix + path)
                 .method(method)
-                .accessControl(AccessControlStrategy.OPEN_ROUTE)
+                .accessControl(accessControl)
                 .type(type);
 
-        if(requireAuthenticated) {
-            RouteHandler guarded = permissionKey == null || permissionKey.isBlank()
+        RouteHandler guarded = handler;
+        if (requireAuthenticated) {
+            guarded = permissionKey == null || permissionKey.isBlank()
                     ? authFilter.authenticated(handler)
                     : authFilter.require(permissionKey, handler);
-            mounter = mounter.handler(errorHandler.wrap(guarded));
         }
-        else {
-            mounter = mounter.handler(errorHandler.wrap(handler));
-        }
+        mounter = mounter.handler(errorHandler.wrap(guarded));
 
-        if(type.equals(RouteGroup.TYPE_JSON)) {
+        if (RouteGroup.TYPE_JSON.equals(type)) {
             mounter = mounter.renderer(Json.GSON::toJson);
         }
 
-        mounter.mount();
-    }
-    protected void mount(
-            RouteGroup routes,
-            AccessControlStrategy accessControl,
-            HttpMethod method,
-            String path,
-            String type,
-            RouteHandler handler
-    ) {
-        // Mount route
-        RouteGroup.RouteMounter mounter =  routes.newRoute(routePrefix + path)
-                .method(method)
-                .type(type)
-                .accessControl(accessControl)
-                .handler(errorHandler.wrap(handler));
-        if(type.equals(RouteGroup.TYPE_JSON)) {
-            mounter = mounter.renderer(Json.GSON::toJson);
-        }
         mounter.mount();
     }
 }

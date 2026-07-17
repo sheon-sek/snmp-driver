@@ -8,12 +8,3 @@ export const baseApi = createAuthBaseApi({
 
 export const healthApi = injectHealthEndpoints(baseApi);
 export const authApi = injectAuthEndpoints(healthApi);
-
-// export const { useHealthQuery } = webAppHealthApi;
-// export const {
-//   useCurrentUserQuery,
-//   usePermissionConfigQuery,
-//   useSecurityLevelRolesQuery,
-//   useUpdatePermissionConfigMutation,
-//   useResetPermissionConfigMutation,
-// } = webAppAuthApi;

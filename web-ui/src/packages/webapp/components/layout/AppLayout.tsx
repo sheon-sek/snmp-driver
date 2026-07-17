@@ -20,7 +20,6 @@ export interface AppLayoutProps {
   navigationGroups: NavigationGroup[];
   routes: AppRouteDefinition[];
   rightActions?: ReactNode;
-  authContext?: unknown;
 }
 
 export function AppLayout({

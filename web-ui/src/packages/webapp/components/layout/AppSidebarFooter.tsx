@@ -9,7 +9,7 @@ import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from "react
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
 import { badgeVariants } from "@/components/ui/badge";
-import { getApiBase } from "@/embedContext";
+import { useApiRuntime } from "@/embedContext";
 import { useTranslation } from "react-i18next";
 
 type HealthQueryStatus = "loading" | "connected" | "error";
@@ -49,6 +49,7 @@ function formatErrorMessage(
 export function AppSidebarFooter() {
     const { state } = useSidebar();
     const { t } = useTranslation();
+    const { apiBase } = useApiRuntime();
     const {
         data,
         isLoading,
@@ -65,7 +66,7 @@ export function AppSidebarFooter() {
                 <SidebarMenuItem>
                     <div className="w-full flex justify-center">
                         <HealthHoverCard
-                            apiBase={getApiBase()}
+                            apiBase={apiBase}
                             data={data}
                             errorMessage={formatErrorMessage(error, t("general.layout.footer.health.errorFallback"))}
                             presentation={presentation}

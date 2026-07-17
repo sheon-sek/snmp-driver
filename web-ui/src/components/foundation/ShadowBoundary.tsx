@@ -36,7 +36,7 @@ function extractFontFaceRules(css: string) {
 }
 
 function ensureGlobalCssPrimitives() {
-  if (typeof document === 'undefined' || document.getElementById(GLOBAL_CSS_PRIMITIVES_STYLE_ID)) return;
+  if (typeof document === 'undefined') return;
 
   const primitiveRules = [
     extractTailwindPropertyRules(styles),
@@ -44,10 +44,15 @@ function ensureGlobalCssPrimitives() {
   ].filter(Boolean).join('\n');
   if (!primitiveRules) return;
 
-  const style = document.createElement('style');
-  style.id = GLOBAL_CSS_PRIMITIVES_STYLE_ID;
-  style.textContent = primitiveRules;
-  document.head.appendChild(style);
+  let style = document.getElementById(GLOBAL_CSS_PRIMITIVES_STYLE_ID);
+  if (!style) {
+    style = document.createElement('style');
+    style.id = GLOBAL_CSS_PRIMITIVES_STYLE_ID;
+    document.head.appendChild(style);
+  }
+  if (style.textContent !== primitiveRules) {
+    style.textContent = primitiveRules;
+  }
 }
 
 export function ShadowBoundary({ children }: ShadowBoundaryProps) {
@@ -106,7 +111,7 @@ export function ShadowBoundary({ children }: ShadowBoundaryProps) {
   return (
     <>
       <div data-eetarp-shadow-host ref={hostRef} />
-      {content as unknown as React.ReactNode}
+      {content}
     </>
   );
 }

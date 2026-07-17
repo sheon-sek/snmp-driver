@@ -4,6 +4,7 @@ import com.inductiveautomation.ignition.gateway.dataroutes.RequestContext;
 import com.jw.ignition.auth.core.AuthCore;
 import com.jw.ignition.auth.core.AppAuthConfig;
 import com.jw.ignition.auth.core.AppAuthContext;
+import com.jw.ignition.common.api.ApiException;
 import com.jw.ignition.common.api.ApiResponses;
 import com.jw.ignition.common.util.Json;
 import jakarta.servlet.http.HttpServletResponse;
@@ -39,14 +40,49 @@ public final class AuthRoutes {
 
     public Object handleUpdateConfig(RequestContext request, HttpServletResponse response) throws IOException {
         AppAuthContext actor = currentActor(request);
-        AppAuthConfig incoming = Json.read(request.getRequest(), AppAuthConfig.class);
-        AppAuthConfig saved = auth.updateConfig(incoming, actor.username(), incoming.getRevision());
-        return ApiResponses.ok(saved);
-    };
+        AppAuthConfig incoming;
+        try {
+            incoming = Json.read(request.getRequest(), AppAuthConfig.class);
+        } catch (RuntimeException error) {
+            throw new ApiException(
+                    HttpServletResponse.SC_BAD_REQUEST,
+                    "INVALID_AUTH_CONFIG",
+                    "Request body is not valid auth config JSON."
+            );
+        }
+        if (incoming == null) {
+            throw new ApiException(
+                    HttpServletResponse.SC_BAD_REQUEST,
+                    "INVALID_AUTH_CONFIG",
+                    "Request body must contain an auth config."
+            );
+        }
+
+        try {
+            AppAuthConfig saved = auth.updateConfig(incoming, actor.username(), incoming.getRevision());
+            return ApiResponses.ok(saved);
+        } catch (AuthCore.RevisionConflictException error) {
+            throw new ApiException(
+                    HttpServletResponse.SC_CONFLICT,
+                    "REVISION_CONFLICT",
+                    error.getMessage(),
+                    Map.of(
+                            "expectedRevision", error.expectedRevision(),
+                            "currentRevision", error.currentRevision()
+                    )
+            );
+        } catch (IllegalArgumentException error) {
+            throw new ApiException(
+                    HttpServletResponse.SC_BAD_REQUEST,
+                    "INVALID_AUTH_CONFIG",
+                    error.getMessage()
+            );
+        }
+    }
 
     public Object handleResetConfig(RequestContext request, HttpServletResponse response) throws IOException {
         AppAuthContext actor = currentActor(request);
-        AppAuthConfig saved = auth.resetConfig(actor.username(), auth.currentConfig().getRevision());
+        AppAuthConfig saved = auth.resetConfig(actor.username());
         return ApiResponses.ok(saved);
     }
 

@@ -1,35 +1,24 @@
+import { createContext, useContext } from "react";
+
 export type EmbedMode = "standalone" | "perspective";
 export interface PerspectiveSessionContext {
   sessionId?: string;
   projectName?: string;
 }
-
-let apiBase: string = "";
-let mode: EmbedMode = "standalone";
-let perspectiveSessionContext: PerspectiveSessionContext = {};
-
-export function setApiBase(next: string) {
-  apiBase = next;
-}
-export function getApiBase(): string {
-  return apiBase;
+export interface ApiRuntimeContext {
+  apiBase: string;
+  embedMode: EmbedMode;
+  perspectiveSession?: PerspectiveSessionContext;
 }
 
-export function setEmbedMode(next: EmbedMode) {
-  mode = next;
-}
-export function getEmbedMode(): EmbedMode {
-  return mode;
-}
-export function isPerspectiveEmbed(): boolean {
-  return mode === "perspective";
-}
+const ApiRuntimeReactContext = createContext<ApiRuntimeContext | null>(null);
 
-export function setPerspectiveSessionContext(
-  context: PerspectiveSessionContext,
-) {
-  perspectiveSessionContext = context;
-}
-export function getPerspectiveSessionContext(): PerspectiveSessionContext {
-  return perspectiveSessionContext;
+export const ApiRuntimeProvider = ApiRuntimeReactContext.Provider;
+
+export function useApiRuntime(): ApiRuntimeContext {
+  const context = useContext(ApiRuntimeReactContext);
+  if (!context) {
+    throw new Error("ApiRuntimeProvider is missing");
+  }
+  return context;
 }

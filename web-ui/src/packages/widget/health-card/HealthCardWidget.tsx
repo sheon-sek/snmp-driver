@@ -1,4 +1,5 @@
 import { Activity, Server } from "lucide-react";
+import { useState } from "react";
 
 import { AppProvider } from "@/components/foundation/AppProvider";
 import { Badge } from "@/components/ui/badge";
@@ -9,11 +10,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { setApiBase } from "@/embedContext";
 import { getApiErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useHealth } from "./query/health";
-import { healthCardStore } from "./store";
+import { createHealthCardStore } from "./store";
 
 export interface HealthCardWidgetProps {
   apiBase?: string;
@@ -24,10 +24,21 @@ export function HealthCardWidget({
   apiBase = import.meta.env.VITE_API_BASE_URL,
   title = "Ignition SDK Boilerplate Health",
 }: HealthCardWidgetProps) {
-  setApiBase(apiBase);
+  return (
+    <HealthCardWidgetInstance key={apiBase} apiBase={apiBase} title={title} />
+  );
+}
+
+function HealthCardWidgetInstance({
+  apiBase,
+  title,
+}: Required<HealthCardWidgetProps>) {
+  const [store] = useState(() =>
+    createHealthCardStore({ apiBase, embedMode: "standalone" }),
+  );
 
   return (
-    <AppProvider store={healthCardStore} toasterProps={false}>
+    <AppProvider store={store} toasterProps={false}>
       <HealthCard title={title} />
     </AppProvider>
   );

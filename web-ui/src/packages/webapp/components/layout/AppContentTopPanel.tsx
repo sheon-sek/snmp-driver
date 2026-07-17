@@ -1,4 +1,4 @@
-import { Fragment, ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { AppRouteDefinition } from "@/packages/webapp/types/appRoutes";
@@ -14,50 +14,45 @@ import {
 } from "@/components/ui/breadcrumb";
 import { LanguageSwitcher } from "@/components/common/LanguageSwitcher";
 import { ThemeModeSwitcher } from "@/components/common/ThemeModeSwitcher";
-import { getEmbedMode } from '@/embedContext';
+import { useApiRuntime } from "@/embedContext";
 
 interface BreadcrumbEntry {
-    label: string;
-    href?: string;
+  label: string;
+  href?: string;
 }
 
 export interface AppContextTopPanelProps {
-    routes: AppRouteDefinition[],
-    rightActions?: ReactNode
+  routes: AppRouteDefinition[];
+  rightActions?: ReactNode;
 }
 
 export function AppContextTopPanel({
-    routes, rightActions, ...props
-}:AppContextTopPanelProps) {
-    const location = useLocation();
-    const { t } = useTranslation();
-    const breadcrumbItems = getBreadcrumbItems(routes, location.pathname, t);
+  routes,
+  rightActions,
+}: AppContextTopPanelProps) {
+  const location = useLocation();
+  const { t } = useTranslation();
+  const { embedMode } = useApiRuntime();
+  const breadcrumbItems = getBreadcrumbItems(routes, location.pathname, t);
 
-    return (
-        <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-background px-4" {...props}>
-          <div className="flex min-w-0 items-center gap-3">
-            <SidebarTrigger className="shrink-0" />
-            <Separator orientation="vertical" className="h-5" />
-            <AppBreadcrumb items={breadcrumbItems} />
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {
-              (import.meta.env.DEV || getEmbedMode() === "standalone") && (
-                <>
-                  {
-                    rightActions ?? (
-                      <>
-                        <LanguageSwitcher />
-                        <ThemeModeSwitcher />
-                      </>
-                    )
-                  }
-                </>
-              )
-            }
-          </div>
-        </header>
-    )
+  return (
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-background px-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <SidebarTrigger className="shrink-0" />
+        <Separator orientation="vertical" className="h-5" />
+        <AppBreadcrumb items={breadcrumbItems} />
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {(import.meta.env.DEV || embedMode === "standalone") &&
+          (rightActions ?? (
+            <>
+              <LanguageSwitcher />
+              <ThemeModeSwitcher />
+            </>
+          ))}
+      </div>
+    </header>
+  );
 }
 
 function AppBreadcrumb({ items }: { items: BreadcrumbEntry[] }) {

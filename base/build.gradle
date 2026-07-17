@@ -12,13 +12,11 @@ dependencies {
     compileOnly "com.inductiveautomation.ignitionsdk:ignition-common:${property("ignitionVersion")}"
     compileOnly "com.inductiveautomation.ignitionsdk:gateway-api:${property("ignitionVersion")}"
     compileOnly "com.inductiveautomation.ignitionsdk:perspective-gateway:${property("ignitionVersion")}"
-    compileOnly project(":common")
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.3'
     testRuntimeOnly "com.inductiveautomation.ignitionsdk:ignition-common:${property("ignitionVersion")}"
     testRuntimeOnly "com.inductiveautomation.ignitionsdk:gateway-api:${property("ignitionVersion")}"
     testRuntimeOnly "com.inductiveautomation.ignitionsdk:perspective-gateway:${property("ignitionVersion")}"
-    testRuntimeOnly project(":common")
 }
 
 tasks.withType(Test).configureEach {

@@ -1,5 +1,4 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
-import { toast } from "sonner";
 import {
   defaultLanguage,
   supportedLanguageCodes,
@@ -34,9 +33,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-export function toAppLanguage(value: string | undefined): AppLanguage {
+type InvalidPreferenceHandler = (message: string) => void;
+
+export function toAppLanguage(
+  value: string | undefined,
+  onInvalid?: InvalidPreferenceHandler,
+): AppLanguage {
   if (!languages.has(value as AppLanguage)) {
-    toast.warning(
+    onInvalid?.(
       `Unsupported language: ${value}. Falling back to default language '${initialUiPreferencesState.language}'.`,
     );
     return initialUiPreferencesState.language;
@@ -45,13 +49,16 @@ export function toAppLanguage(value: string | undefined): AppLanguage {
   return value as AppLanguage;
 }
 
-export function toAppThemeMode(value: string | undefined): AppThemeMode {
+export function toAppThemeMode(
+  value: string | undefined,
+  onInvalid?: InvalidPreferenceHandler,
+): AppThemeMode {
   // Fall back to default theme mode if the value is not a valid AppThemeMode or PerspectiveThemeMode
   if (
     !themeModes.has(value as AppThemeMode) &&
     !perspectiveThemeModes.has(value as PerspectiveThemeMode)
   ) {
-    toast.warning(
+    onInvalid?.(
       `Unsupported theme mode: ${value}. Falling back to default theme mode '${initialUiPreferencesState.themeMode}'.`,
     );
 

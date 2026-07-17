@@ -11,6 +11,5 @@ java {
 dependencies {
     // add common scoped dependencies here
     compileOnly "com.inductiveautomation.ignitionsdk:ignition-common:${property("ignitionVersion")}"
-    compileOnly "com.inductiveautomation.ignitionsdk:gateway-api:${property("ignitionVersion")}"
     compileOnly "com.inductiveautomation.ignitionsdk:perspective-common:${property("ignitionVersion")}"
 }

@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
 import { getApiErrorMessage, isApiErrorResponse } from "@/lib/api";
-import { CurrentUserResponse } from "@/lib/types";
+import type { CurrentUserResponse } from "@/lib/types";
 import { useCurrentUser } from "../../query/auth";
 import { useTranslation } from "react-i18next";
 

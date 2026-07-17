@@ -1,17 +1,12 @@
 package com.jw.ignition.auth.core;
 
-public final class AppPermissionDef {
-    private final String key;
-    private final String label;
-    private final String description;
-
-    public AppPermissionDef(String key, String label, String description) {
-        this.key = key;
-        this.label = label;
-        this.description = description == null ? "" : description;
+public record AppPermissionDef(String key, String label, String description) {
+    public AppPermissionDef {
+        if (key == null || key.isBlank()) {
+            throw new IllegalArgumentException("permission key cannot be blank");
+        }
+        key = key.trim();
+        label = label == null || label.isBlank() ? key : label.trim();
+        description = description == null ? "" : description.trim();
     }
-
-    public String key() { return key; }
-    public String label() { return label; }
-    public String description() { return description; }
 }

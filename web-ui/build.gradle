@@ -25,14 +25,13 @@ def yarnPackages = tasks.register('yarnPackages', YarnTask) {
     args.set(['install'])
 
     inputs.files(
-        fileTree(project.projectDir).matching {
-            include '**/package.json', '**/yarn.lock'
-        }
+        file('package.json'),
+        file('yarn.lock'),
+        file('.yarnrc'),
+        file('.npmrc')
     )
 
-    outputs.dirs(
-        file('node_modules')
-    )
+    outputs.file(file('node_modules/.yarn-integrity'))
 
     dependsOn "${project.path}:yarn", ':web-ui:npmSetup'
 }
@@ -57,13 +56,11 @@ def viteBuild = tasks.register('viteBuild', NpmTask) {
         }
     )
 
-    outputs.files(
-        fileTree(projectOutput)
-    )
+    outputs.dir(projectOutput)
 }
 
 tasks.named('processResources') {
-    dependsOn viteBuild, yarnPackages
+    dependsOn viteBuild
 }
 
 // Make sure the gateway project doesn't process resources until the Vite build is done.

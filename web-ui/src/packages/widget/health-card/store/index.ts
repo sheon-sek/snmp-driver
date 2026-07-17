@@ -1,17 +1,18 @@
 import { configureStore } from "@reduxjs/toolkit";
 
+import type { ApiRuntimeContext } from "@/embedContext";
 import { baseApi } from "../api";
 
-export function createHealthCardStore() {
+export function createHealthCardStore(runtimeContext: ApiRuntimeContext) {
   return configureStore({
     reducer: {
       [baseApi.reducerPath]: baseApi.reducer,
     },
     middleware: (getDefaultMiddleware) =>
-      getDefaultMiddleware().concat(baseApi.middleware),
+      getDefaultMiddleware({
+        thunk: { extraArgument: runtimeContext },
+      }).concat(baseApi.middleware),
   });
 }
-
-export const healthCardStore = createHealthCardStore();
 
 export type HealthCardStore = ReturnType<typeof createHealthCardStore>;

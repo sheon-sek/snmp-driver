@@ -19,8 +19,8 @@ public final class ServiceBundle extends AbstractBundle {
                 AppPermission.AUTHORIZATION_MANAGE,
                 AppPermission.catalog()
         ));
-        authCore.setup();
         auth = authCore;
+        authCore.setup();
     }
 
     @Override
@@ -30,11 +30,8 @@ public final class ServiceBundle extends AbstractBundle {
 
     @Override
     protected void shutdownProcess() {
-        try {
-            if (auth != null) {
-                auth.shutdown();
-            }
-        } finally {
+        if (auth != null) {
+            auth.shutdown();
             auth = null;
         }
     }

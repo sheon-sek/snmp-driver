@@ -1,6 +1,30 @@
+import { createContext, useContext, type ReactNode } from "react"
 import { Toaster as Sonner } from "sonner"
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
+const ToasterIdContext = createContext<string | null>(null)
+
+function ToasterIdProvider({
+  children,
+  value,
+}: {
+  children: ReactNode
+  value: string
+}) {
+  return (
+    <ToasterIdContext.Provider value={value}>
+      {children}
+    </ToasterIdContext.Provider>
+  )
+}
+
+function useToasterId() {
+  const toasterId = useContext(ToasterIdContext)
+  if (!toasterId) {
+    throw new Error("ToasterIdProvider is missing")
+  }
+  return toasterId
+}
 
 const Toaster = ({ theme = "system", ...props }: ToasterProps) => {
   return (
@@ -23,4 +47,4 @@ const Toaster = ({ theme = "system", ...props }: ToasterProps) => {
   )
 }
 
-export { Toaster, type ToasterProps }
+export { Toaster, ToasterIdProvider, useToasterId, type ToasterProps }

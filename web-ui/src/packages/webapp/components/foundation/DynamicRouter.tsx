@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { isPerspectiveEmbed } from "@/embedContext";
+import { useApiRuntime } from "@/embedContext";
 import { MemoryRouter, HashRouter, Routes } from "react-router-dom";
 
 export interface DynamicRouterProps {
@@ -7,7 +7,9 @@ export interface DynamicRouterProps {
 }
 
 export function DynamicRouter({ children }:DynamicRouterProps) {
-    if(isPerspectiveEmbed()) {
+    const { embedMode } = useApiRuntime();
+
+    if(embedMode === "perspective") {
         return (
             <MemoryRouter initialEntries={['/']}>
                 <Routes>

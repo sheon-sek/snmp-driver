@@ -18,26 +18,22 @@ public class DesignerHook extends AbstractDesignerModuleHook {
         BundleUtil.get().addBundle("components", DesignerHook.class.getClassLoader(), "components");
     }
 
-    public DesignerHook() {
-        logger.info("Registering components in Designer...");
-    }
-
     @Override
     public void startup(DesignerContext context, LicenseState activationState) {
-        logger.debug("Initializing registry entrants...");
+        logger.info("Registering components in Designer...");
         PerspectiveDesignerInterface pdi = PerspectiveDesignerInterface.get(context);
+        DesignerComponentRegistry currentRegistry = pdi.getDesignerComponentRegistry();
 
-        registry = pdi.getDesignerComponentRegistry();
-
-        // register components to get them on the palette
-        registry.registerComponent(ExampleWebApp.DESCRIPTOR);
+        currentRegistry.registerComponent(ExampleWebApp.DESCRIPTOR);
+        registry = currentRegistry;
     }
 
     @Override
     public void shutdown() {
-        if (registry != null) {
-            registry.removeComponent(ExampleWebApp.COMPONENT_ID);
+        DesignerComponentRegistry currentRegistry = registry;
 
+        if (currentRegistry != null) {
+            currentRegistry.removeComponent(ExampleWebApp.COMPONENT_ID);
             registry = null;
         }
     }

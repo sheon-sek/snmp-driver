@@ -31,22 +31,17 @@ export function AppSidebar({
 
   return (
     <Sidebar collapsible="icon" className="relative">
-      {
-        !hideContent &&
-        (
-          <>
-            <AppSidebarHeader appTitle={appTitle} appSubtitle={appSubtitle} appLogo={appLogo} />
-            <AppSidebarContent navigationGroups={navigationGroups}/>
-            <AppSidebarFooter/>
-          </>
-        ) ||
-        (
-          <div className="w-full text-center text-xs text-muted-foreground my-auto p-4">
-            {state === "expanded" ? t("general.layout.sidebar.navigationHidden") : ""}
-          </div>
-        )
-
-      }
+      {hideContent ? (
+        <div className="my-auto w-full p-4 text-center text-xs text-muted-foreground">
+          {state === "expanded" ? t("general.layout.sidebar.navigationHidden") : ""}
+        </div>
+      ) : (
+        <>
+          <AppSidebarHeader appTitle={appTitle} appSubtitle={appSubtitle} appLogo={appLogo} />
+          <AppSidebarContent navigationGroups={navigationGroups}/>
+          <AppSidebarFooter/>
+        </>
+      )}
 
       <SidebarRail/>
     </Sidebar>

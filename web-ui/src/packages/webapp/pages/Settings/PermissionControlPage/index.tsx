@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { useToasterId } from "@/components/ui/sonner";
 import { getApiErrorMessage } from "@/lib/api";
 import {
   buildRoleAuthority,
@@ -37,6 +38,7 @@ import { useTranslation } from "react-i18next";
 
 export default function PermissionControlPage() {
   const { t } = useTranslation();
+  const toasterId = useToasterId();
   const currentUserQuery = useCurrentUser();
   const configQuery = usePermissionConfig();
   const rolesQuery = useSecurityLevelRoles();
@@ -92,7 +94,9 @@ export default function PermissionControlPage() {
         enabled,
       )
     ) {
-      toast.error(t("permissionControlPage.toasts.keepAuthorizationRole"));
+      toast.error(t("permissionControlPage.toasts.keepAuthorizationRole"), {
+        toasterId,
+      });
       return;
     }
 
@@ -125,7 +129,7 @@ export default function PermissionControlPage() {
 
     try {
       await updatePermissionConfig(draft).unwrap();
-      toast.success(t("permissionControlPage.toasts.saved"));
+      toast.success(t("permissionControlPage.toasts.saved"), { toasterId });
       closeRoleDialog();
     } catch (err) {
       toast.error(
@@ -133,6 +137,7 @@ export default function PermissionControlPage() {
           err as Parameters<typeof getApiErrorMessage>[0],
           t("permissionControlPage.errors.saveFailed"),
         ),
+        { toasterId },
       );
     }
   }

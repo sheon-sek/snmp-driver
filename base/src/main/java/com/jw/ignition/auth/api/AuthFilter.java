@@ -1,10 +1,8 @@
 package com.jw.ignition.auth.api;
 
-import com.inductiveautomation.ignition.common.auth.web.WebAuthUser;
 import com.inductiveautomation.ignition.gateway.dataroutes.RequestContext;
 import com.inductiveautomation.ignition.gateway.dataroutes.RouteHandler;
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
-import com.inductiveautomation.ignition.gateway.web.session.WebUiSession;
 import com.inductiveautomation.perspective.gateway.api.PerspectiveContext;
 import com.inductiveautomation.perspective.gateway.api.WebAuthStatus;
 import com.inductiveautomation.perspective.gateway.session.InternalSession;
@@ -20,7 +18,6 @@ import java.security.Principal;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 public final class AuthFilter {
 
@@ -42,17 +39,12 @@ public final class AuthFilter {
         this.auth = auth;
     }
 
-    /**
-     * 只要求已认证，不要求某个业务 permission。
-     * 适合 /auth/me 这类 endpoint。
-     */
+    /** 仅要求已认证，不要求业务权限。 */
     public RouteHandler authenticated(RouteHandler delegate) {
         return wrap(null, delegate);
     }
 
-    /**
-     * 要求已认证 + 具备指定 permission。
-     */
+    /** 要求已认证且具备指定业务权限。 */
     public RouteHandler require(String permissionKey, RouteHandler delegate) {
         if (isBlank(permissionKey)) {
             throw new IllegalArgumentException("permissionKey cannot be blank");
@@ -103,26 +95,12 @@ public final class AuthFilter {
     }
 
     private Optional<AppAuthContext> resolveGatewayIdentity(RequestContext requestContext, HttpServletRequest request) {
-        Optional<WebAuthUser> webUser = WebUiSession.WebUiSessionAccessControl.getWebAuthUser(requestContext);
-        if (webUser.isPresent()) {
-            WebAuthUser user = webUser.get();
-            return Optional.of(new AppAuthContext(
-                    AppAuthSource.GATEWAY_WEB_UI,
-                    user.getUserName(),
-                    auth.toSecurityLevelRolePaths(user.getRoles()),
-                    Set.of(),
-                    Set.of()
-            ));
+        Optional<AppAuthContext> gatewayUser = auth.gatewayWebUser(requestContext);
+        if (gatewayUser.isPresent()) {
+            return gatewayUser;
         }
 
-        /*
-         * 如果你完全使用 OPEN_ROUTE，WebUiSessionAccessControl.getWebAuthUser(requestContext)
-         * 不一定会被 IA 填充。
-         *
-         * 所以这里保留 Principal fallback。
-         * 若你后续发现 Gateway Web UI request 下 principal 为空，就不能只靠 HTTP filter；
-         * 那时 Gateway Web UI 入口仍需要 WebUiSessionAccessControl，或要使用 IA 内部 session API。
-         */
+        /* OPEN_ROUTE 不保证填充 WebAuthUser；为通用开放路由保留 Servlet Principal 回退。 */
         Principal principal = request.getUserPrincipal();
         if (principal == null || isBlank(principal.getName())) {
             return Optional.empty();
@@ -226,33 +204,8 @@ public final class AuthFilter {
             return Optional.empty();
         }
 
-        return authStatus.getUser().map(user -> identityFromWebAuthUser(session, user));
-    }
-
-    private AppAuthContext identityFromWebAuthUser(InternalSession session, WebAuthUser user) {
-        String username = trim(user.getUserName());
-
-        if (isBlank(username)) {
-            username = trim(user.getId());
-        }
-
-        Set<String> roles = user.getRoles().stream()
-                .map(AuthFilter::trim)
-                .filter(role -> !role.isBlank())
-                .collect(Collectors.toSet());
-        Set<String> rolePaths = auth.toSecurityLevelRolePaths(roles);
-
-        /*
-         * 这里先只放 roles。
-         * 如果你后续能从 WebAuthStatus / session auth context 取到 security levels，
-         * 再统一放进 securityLevels。
-         */
-        return new AppAuthContext(
-                AppAuthSource.PERSPECTIVE_SESSION,
-                username,
-                rolePaths,
-                Set.of(),
-                Set.of()
+        return authStatus.getUser().flatMap(user ->
+                auth.fromWebAuthUser(user, AppAuthSource.PERSPECTIVE_SESSION)
         );
     }
 

@@ -29,40 +29,32 @@ public class GatewayHook extends AbstractGatewayModuleHook {
         try {
             services.setup(context);
             perspective.setup(context);
-
-            registerGatewayPage();
-        } catch (Exception error) {
-            logger.error("'%s' module setup failed.".formatted(ModuleConstants.MODULE_NAME));
+            registerGatewayPages();
+        } catch (RuntimeException | Error error) {
+            logger.error("'{}' module setup failed.", ModuleConstants.MODULE_NAME, error);
+            this.context = null;
+            rollback(error);
+            throw error;
         }
     }
 
     @Override
     public void startup(LicenseState activationState) {
-        services.startup();
-        perspective.startup();
+        try {
+            services.startup();
+            perspective.startup();
+        } catch (RuntimeException | Error error) {
+            logger.error("'{}' module startup failed.", ModuleConstants.MODULE_NAME, error);
+            context = null;
+            rollback(error);
+            throw error;
+        }
     }
 
     @Override
     public void shutdown() {
-        Throwable failure = null;
-        try {
-            perspective.shutdown();
-        } catch (RuntimeException | Error error) {
-            failure = error;
-        }
-
-        try {
-            services.shutdown();
-        } catch (RuntimeException | Error error) {
-            if (failure == null) {
-                failure = error;
-            } else {
-                failure.addSuppressed(error);
-            }
-        }
-
         context = null;
-        rethrow(failure);
+        rollback(null);
     }
 
     @Override
@@ -88,10 +80,20 @@ public class GatewayHook extends AbstractGatewayModuleHook {
 
     // --------------------------------------------------------- //
 
-    private void registerGatewayPage() {
+    private void registerGatewayPages() {
         SystemJsModule webappJsModule = new SystemJsModule(
                 ModuleConstants.MODULE_ID,
-                "/res/%s/webapp.js".formatted(ModuleConstants.MOUNT_ALIAS)
+                "/res/%s/%s".formatted(
+                        ModuleConstants.MOUNT_ALIAS,
+                        ModuleConstants.WebPackages.WEBAPP_FILENAME
+                )
+        );
+        SystemJsModule pageJsModule = new SystemJsModule(
+                "%s.page".formatted(ModuleConstants.MODULE_ID),
+                "/res/%s/%s".formatted(
+                        ModuleConstants.MOUNT_ALIAS,
+                        ModuleConstants.WebPackages.PAGE_FILENAME
+                )
         );
 
         context.getWebResourceManager().getNavigationModel().getServices()
@@ -105,6 +107,14 @@ public class GatewayHook extends AbstractGatewayModuleHook {
                         webappJsModule
                     )
                 )
+                .addPage("Counter", page -> page
+                    .position(20)
+                    .mount(
+                        "%s/counter".formatted(ModuleConstants.MOUNT_ALIAS),
+                        "IgnitionSdkBoilerplatePage",
+                        pageJsModule
+                    )
+                )
             );
     }
 
@@ -115,6 +125,34 @@ public class GatewayHook extends AbstractGatewayModuleHook {
             .getPackage()
             .getImplementationVersion();
         return version == null || version.isBlank() ? "development" : version;
+    }
+
+    private void rollback(Throwable cause) {
+        Throwable failure = cause;
+
+        try {
+            perspective.shutdown();
+        } catch (RuntimeException | Error error) {
+            failure = merge(failure, error);
+        }
+
+        try {
+            services.shutdown();
+        } catch (RuntimeException | Error error) {
+            failure = merge(failure, error);
+        }
+
+        if (cause == null) {
+            rethrow(failure);
+        }
+    }
+
+    private static Throwable merge(Throwable failure, Throwable next) {
+        if (failure == null) {
+            return next;
+        }
+        failure.addSuppressed(next);
+        return failure;
     }
 
     private static void rethrow(Throwable failure) {

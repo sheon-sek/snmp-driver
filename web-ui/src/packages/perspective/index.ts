@@ -7,11 +7,10 @@ import {
   ExampleWebAppComponentMeta,
 } from "./example-webapp-wrapper";
 
-// export so the components are referencable, e.g. `RadComponents['Image']
+// Export components for direct host access when needed.
 export { ExampleWebAppComponent };
 
-// as new components are implemented, import them, and add their meta to this array
-const components: Array<ComponentMeta> = [new ExampleWebAppComponentMeta()];
+// Add new component metadata here and register each component exactly once.
+const components: ComponentMeta[] = [new ExampleWebAppComponentMeta()];
 
-// iterate through our components, registering each one with the registry.  Don't forget to register on the Java side too!
-components.forEach((c: ComponentMeta) => ComponentRegistry.register(c));
+components.forEach((component) => ComponentRegistry.register(component));

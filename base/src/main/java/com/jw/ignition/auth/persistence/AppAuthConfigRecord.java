@@ -1,13 +1,18 @@
 package com.jw.ignition.auth.persistence;
 
-import com.inductiveautomation.ignition.gateway.localdb.persistence.*;
-import com.jw.ignitionsdkboilerplate.common.ModuleConstants;
+import com.inductiveautomation.ignition.gateway.localdb.persistence.DateField;
+import com.inductiveautomation.ignition.gateway.localdb.persistence.IdentityField;
+import com.inductiveautomation.ignition.gateway.localdb.persistence.IntField;
+import com.inductiveautomation.ignition.gateway.localdb.persistence.PersistentRecord;
+import com.inductiveautomation.ignition.gateway.localdb.persistence.RecordMeta;
+import com.inductiveautomation.ignition.gateway.localdb.persistence.StringField;
+import com.jw.ignition.auth.AuthConstants;
 import simpleorm.dataset.SFieldFlags;
 
 import java.util.Date;
 
 public class AppAuthConfigRecord extends PersistentRecord {
-    public static final String TABLENAME = ModuleConstants.getPersistentRecordPrefix() + "_AppAuthConfig";
+    public static final String TABLENAME = AuthConstants.PERSISTENCE_PREFIX + "_AppAuthConfig";
     public static final RecordMeta<AppAuthConfigRecord> META = new RecordMeta<>(AppAuthConfigRecord.class, TABLENAME);
 
     public static final IdentityField Id = new IdentityField(META);

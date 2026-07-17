@@ -2,16 +2,12 @@ import {
   Component,
   ComponentMeta,
   ComponentProps,
-  ComponentRegistry,
   PComponent,
   PropertyTree,
   SizeObject,
 } from '@inductiveautomation/perspective-client';
 import { WebApp } from '@/packages/webapp/WebApp';
-import { setEmbedMode, setPerspectiveSessionContext } from '@/embedContext';
 import { defaultLanguage } from '@/i18n';
-
-setEmbedMode('perspective');
 
 
 // The 'key' or 'id' for this component type.  Component must be registered with this EXACT key in the Java side as well
@@ -26,21 +22,39 @@ export interface ExampleWebAppProps {
   theme: string;
 }
 
+interface PerspectiveClientStore {
+  view?: {
+    page?: {
+      parent?: {
+        sessionId?: unknown;
+        projectName?: unknown;
+      };
+    };
+  };
+}
+
 export class ExampleWebAppComponent extends Component<
   ComponentProps<ExampleWebAppProps>
 > {
   render() {
     const { emit, props } = this.props;
-    const client = (this.props.store as any)?.view?.page?.parent;
+    const client = (this.props.store as unknown as PerspectiveClientStore | undefined)
+      ?.view?.page?.parent;
 
-    setPerspectiveSessionContext({
+    const perspectiveSession = {
       sessionId: typeof client?.sessionId === 'string' ? client.sessionId : undefined,
       projectName: typeof client?.projectName === 'string' ? client.projectName : undefined,
-    });
+    };
 
     return (
       <div {...emit({ classes: ['eetarp-perspective-root'] })}>
-        <WebApp apiBase={props.apiBase} locale={props.locale} theme={props.theme} />
+        <WebApp
+          apiBase={props.apiBase}
+          embedMode="perspective"
+          locale={props.locale}
+          perspectiveSession={perspectiveSession}
+          theme={props.theme}
+        />
       </div>
     );
   }
@@ -74,5 +88,3 @@ export class ExampleWebAppComponentMeta implements ComponentMeta {
     };
   }
 }
-
-ComponentRegistry.register(new ExampleWebAppComponentMeta());

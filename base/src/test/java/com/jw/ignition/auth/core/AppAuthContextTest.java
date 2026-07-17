@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AppAuthContextTest {
@@ -24,5 +25,52 @@ class AppAuthContextTest {
         assertTrue(actor.authorities().contains("role:Authenticated/Roles/Engineer"));
         assertTrue(actor.authorities().contains("securityLevel:Authenticated"));
         assertTrue(actor.authorities().contains("claim:canEdit"));
+    }
+
+    @Test
+    void identityCollectionsAreImmutable() {
+        AppAuthContext actor = new AppAuthContext(
+                AppAuthSource.GATEWAY_WEB_UI,
+                "alice",
+                List.of("Authenticated/Roles/Engineer"),
+                List.of("Authenticated"),
+                List.of("canEdit")
+        );
+
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> actor.roles().add("Authenticated/Roles/Administrator")
+        );
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> actor.authorities().clear()
+        );
+    }
+
+    @Test
+    void rejectsBlankUsername() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new AppAuthContext(
+                        AppAuthSource.GATEWAY_WEB_UI,
+                        " ",
+                        List.of("Authenticated/Roles/Administrator"),
+                        List.of(),
+                        List.of()
+                )
+        );
+    }
+
+    @Test
+    void nullIdentityCollectionsAreImmutable() {
+        AppAuthContext actor = new AppAuthContext(
+                AppAuthSource.GATEWAY_WEB_UI,
+                "alice",
+                null,
+                null,
+                null
+        );
+
+        assertThrows(UnsupportedOperationException.class, () -> actor.roles().add("Engineer"));
     }
 }
