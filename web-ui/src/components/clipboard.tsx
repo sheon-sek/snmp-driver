@@ -4,7 +4,7 @@ export async function copyTextToClipboard(text: string) {
       await navigator.clipboard.writeText(text);
       return;
     } catch {
-      // Fall through to the legacy path for embedded or permission-constrained views.
+      // Fall through to the legacy path for embedded or restricted views.
     }
   }
 

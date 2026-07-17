@@ -6,14 +6,17 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "../ui/button";
 import { Languages } from "lucide-react";
-import { useAppDispatch, useAppSelector } from "@/store";
+import {
+  useUiPreferencesDispatch,
+  useUiPreferencesSelector,
+} from "@/store/uiPreferencesHooks";
 import { setLanguage } from "@/store/uiPreferencesSlice";
 import { supportedLanguages, type AppLanguage } from "@/i18n";
 import { useTranslation } from "react-i18next";
 
 export function LanguageSwitcher() {
-  const dispatch = useAppDispatch();
-  const language = useAppSelector((state) => state.uiPreferences.language);
+  const dispatch = useUiPreferencesDispatch();
+  const language = useUiPreferencesSelector((state) => state.uiPreferences.language);
   const { t } = useTranslation();
 
   const handleLanguageChange = (lang: AppLanguage) => {

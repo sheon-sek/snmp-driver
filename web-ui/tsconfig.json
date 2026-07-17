@@ -29,8 +29,7 @@
   "include": [
     "src",
     "vite.config.ts",
-    "vite.config.perspective.ts",
-    "vite.inline-css.ts"
+    "scripts/vite.inline-css.ts"
   ],
   "exclude": [
     "node_modules",

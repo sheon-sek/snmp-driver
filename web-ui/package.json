@@ -1,10 +1,10 @@
 {
-  "name": "ignition-sdk-boilerplate",
+  "name": "snmp-driver",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "vite build --mode embedded && vite build --mode embedded --config vite.config.perspective.ts",
+    "build": "tsx ./scripts/build-embedded.mts",
     "dev": "vite --mode dev --host=0.0.0.0",
     "lint": "node ./node_modules/typescript/bin/tsc --noEmit"
   },
@@ -64,6 +64,7 @@
     "autoprefixer": "^10.5.0",
     "postcss": "^8.5.15",
     "tailwindcss": "3",
+    "tsx": "^4.23.1",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   },

@@ -7,90 +7,68 @@ import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
 import com.inductiveautomation.ignition.gateway.model.AbstractGatewayModuleHook;
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
 import com.inductiveautomation.ignition.gateway.web.systemjs.SystemJsModule;
-import com.inductiveautomation.perspective.common.api.ComponentRegistry;
-import com.inductiveautomation.perspective.gateway.api.PerspectiveContext;
 import com.jw.ignitionsdkboilerplate.common.ModuleConstants;
-import com.jw.ignitionsdkboilerplate.common.component.ExampleComponent;
 import com.jw.ignitionsdkboilerplate.gateway.api.ApiRouteRegistrar;
-import com.jw.ignitionsdkboilerplate.gateway.auth.AppPermission;
-import com.jw.ignition.auth.AuthConstants;
 import com.jw.ignition.auth.api.AuthRouteRegistrar;
-import com.jw.ignition.auth.core.AppAuthOptions;
-import com.jw.ignition.auth.core.AuthCore;
+import com.jw.ignitionsdkboilerplate.gateway.perspective.PerspectiveBundle;
+import com.jw.ignitionsdkboilerplate.gateway.service.ServiceBundle;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class GatewayHook extends AbstractGatewayModuleHook {
-    private GatewayContext context;
-    private ComponentRegistry componentRegistry;
+    private static final Logger logger = LoggerFactory.getLogger(GatewayHook.class);
 
-    private AuthCore auth;
+    private GatewayContext context;
+    private final ServiceBundle services = new ServiceBundle();
+    private final PerspectiveBundle perspective = new PerspectiveBundle();
 
     @Override
     public void setup(GatewayContext context) {
         this.context = context;
-        this.auth = new AuthCore(context, new AppAuthOptions(
-                AuthConstants.AUTH_NAMESPACE,
-                AppPermission.AUTHORIZATION_MANAGE,
-                AppPermission.catalog()
-        ));
 
-        // Run auth setup
-        auth.setup();
+        try {
+            services.setup(context);
+            perspective.setup(context);
 
-        SystemJsModule jsModule = new SystemJsModule(
-            ModuleConstants.MODULE_ID,
-            String.format(
-                "/res/%s/%s",
-                ModuleConstants.MOUNT_ALIAS,
-                ModuleConstants.MODULE_WEBAPP_GW_FILENAME
-            )
-        );
-
-        context.getWebResourceManager().getNavigationModel().getServices()
-            .addCategory(ModuleConstants.GATEWAY_NAV_CATEGORY_ID, category -> category
-                .label(ModuleConstants.MODULE_NAME)
-                .addPage(ModuleConstants.MODULE_WEBAPP_GW_NAV_PAGENAME, page -> page
-                    .position(10)
-                    .mount(
-                        ModuleConstants.MODULE_WEBAPP_GW_NAV_PATH,
-                        ModuleConstants.MODULE_WEBAPP_GW_COMPONENT_NAME,
-                        jsModule)
-                )
-            );
+            registerGatewayPage();
+        } catch (Exception error) {
+            logger.error("'%s' module setup failed.".formatted(ModuleConstants.MODULE_NAME));
+        }
     }
 
     @Override
     public void startup(LicenseState activationState) {
-        // Startup auth
-        if(auth != null)  {
-            auth.startup();
-        }
-
-        PerspectiveContext perspective = PerspectiveContext.get(context);
-        if (perspective != null) {
-            componentRegistry = perspective.getComponentRegistry();
-            if (componentRegistry != null) {
-                componentRegistry.registerComponent(ExampleComponent.DESCRIPTOR);
-            }
-        }
+        services.startup();
+        perspective.startup();
     }
 
     @Override
     public void shutdown() {
-        if(auth != null) {
-            auth.shutdown();
+        Throwable failure = null;
+        try {
+            perspective.shutdown();
+        } catch (RuntimeException | Error error) {
+            failure = error;
         }
 
-        if (componentRegistry != null) {
-            componentRegistry.removeComponent(ExampleComponent.COMPONENT_ID);
-            componentRegistry = null;
+        try {
+            services.shutdown();
+        } catch (RuntimeException | Error error) {
+            if (failure == null) {
+                failure = error;
+            } else {
+                failure.addSuppressed(error);
+            }
         }
+
         context = null;
+        rethrow(failure);
     }
 
     @Override
     public void mountRouteHandlers(RouteGroup routes) {
-        new AuthRouteRegistrar(context, auth, ModuleConstants.API_PREFIX).register(routes);
-        new ApiRouteRegistrar(context, auth, moduleVersion()).register(routes);
+        new AuthRouteRegistrar(context, services.auth(), ModuleConstants.API_PREFIX).register(routes);
+        new ApiRouteRegistrar(context, services.auth(), moduleVersion()).register(routes);
     }
 
     @Override
@@ -108,10 +86,43 @@ public class GatewayHook extends AbstractGatewayModuleHook {
         return true;
     }
 
+    // --------------------------------------------------------- //
+
+    private void registerGatewayPage() {
+        SystemJsModule webappJsModule = new SystemJsModule(
+                ModuleConstants.MODULE_ID,
+                "/res/%s/webapp.js".formatted(ModuleConstants.MOUNT_ALIAS)
+        );
+
+        context.getWebResourceManager().getNavigationModel().getServices()
+            .addCategory(ModuleConstants.GATEWAY_NAV_CATEGORY_ID, category -> category
+                .label(ModuleConstants.MODULE_NAME)
+                .addPage("Webapp", page -> page
+                    .position(10)
+                    .mount(
+                        "%s/webapp".formatted(ModuleConstants.MOUNT_ALIAS),
+                        "IgnitionSdkBoilerplateWebApp",
+                        webappJsModule
+                    )
+                )
+            );
+    }
+
+    // --------------------------------------------------------- //
+
     private static String moduleVersion() {
         String version = GatewayHook.class
             .getPackage()
             .getImplementationVersion();
         return version == null || version.isBlank() ? "development" : version;
+    }
+
+    private static void rethrow(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
     }
 }

@@ -6,13 +6,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useAppDispatch, useAppSelector } from "@/store";
+import {
+  useUiPreferencesDispatch,
+  useUiPreferencesSelector,
+} from "@/store/uiPreferencesHooks";
 import { setThemeMode, type AppThemeMode } from "@/store/uiPreferencesSlice";
 import { useTranslation } from "react-i18next";
 
 export function ThemeModeSwitcher() {
-    const dispatch = useAppDispatch();
-    const themeMode = useAppSelector((state) => state.uiPreferences.themeMode)
+    const dispatch = useUiPreferencesDispatch();
+    const themeMode = useUiPreferencesSelector((state) => state.uiPreferences.themeMode)
     const { t } = useTranslation();
 
     function getResolvedTheme(theme:AppThemeMode) {

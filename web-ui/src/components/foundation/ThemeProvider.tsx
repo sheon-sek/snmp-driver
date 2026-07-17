@@ -1,38 +1,43 @@
 import { type ReactNode, useEffect, useMemo } from "react";
-import { useAppSelector } from "@/store";
 import { useAppRootContainer } from "./ShadowBoundary";
 import { useTranslation } from "react-i18next";
+import { defaultLanguage, type AppLanguage } from "@/i18n";
+
+export type ThemeMode = "system" | "dark" | "light";
 
 interface ThemeProviderProps {
-  children: ReactNode
+  children: ReactNode;
+  themeMode?: ThemeMode;
+  language?: AppLanguage;
 }
 
-export function ThemeProvider({ children }:ThemeProviderProps) {
+export function ThemeProvider({
+  children,
+  themeMode = "system",
+  language = defaultLanguage,
+}: ThemeProviderProps) {
   const { i18n } = useTranslation();
   const appRootContainer = useAppRootContainer();
 
-  const themeMode = useAppSelector((state) => state.uiPreferences.themeMode)
-  const language = useAppSelector((state) => state.uiPreferences.language)
-
-  const resolvedThme = useMemo(() => {
+  const resolvedTheme = useMemo(() => {
     if(themeMode !== 'system') return themeMode
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ?
+    return typeof window !== "undefined" && window.matchMedia('(prefers-color-scheme: dark)').matches ?
       'dark' : 'light';
   }, [themeMode])
   
   useEffect(() => {
     if (appRootContainer) {
       // Refresh theme mode (dark/light)
-      appRootContainer.setAttribute('data-theme', resolvedThme)
+      appRootContainer.setAttribute('data-theme', resolvedTheme)
       appRootContainer.classList.remove('light', 'dark')
-      appRootContainer.classList.add(resolvedThme)
-      appRootContainer.style.colorScheme = resolvedThme;
+      appRootContainer.classList.add(resolvedTheme)
+      appRootContainer.style.colorScheme = resolvedTheme;
 
       // Refresh language
       appRootContainer.setAttribute('lang', language)
       void i18n.changeLanguage(language)
     }
-  }, [appRootContainer, i18n, resolvedThme, language])
+  }, [appRootContainer, i18n, resolvedTheme, language])
 
   return <>{children}</>
 }

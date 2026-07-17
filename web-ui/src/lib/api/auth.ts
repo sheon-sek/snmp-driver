@@ -1,4 +1,4 @@
-import { baseApi } from "./index";
+import type { BaseApi } from "./index";
 import type {
   AppAuthConfig,
   CurrentUserResponse,
@@ -7,48 +7,44 @@ import type {
   UpdatePermissionConfigRequest,
 } from "@/lib/types/api/auth";
 
-export const authApi = baseApi.injectEndpoints({
-  endpoints: (build) => ({
-    currentUser: build.query<CurrentUserResponse, void>({
-      query: () => ({ url: "/auth/me", method: "GET" }),
-      providesTags: ["CurrentUser"],
-    }),
-    permissionConfig: build.query<PermissionConfigResponse, void>({
-      query: () => ({ url: "/authorization/config", method: "GET" }),
-      providesTags: ["PermissionConfig"],
-    }),
-    securityLevelRoles: build.query<SecurityLevelRolesResponse, void>({
-      query: () => ({
-        url: "/authorization/security-level-roles",
-        method: "GET",
+export function injectAuthEndpoints(api: BaseApi) {
+  return api.injectEndpoints({
+    endpoints: (build) => ({
+      currentUser: build.query<CurrentUserResponse, void>({
+        query: () => ({ url: "/auth/me", method: "GET" }),
+        providesTags: ["CurrentUser"],
       }),
-      providesTags: ["SecurityLevelRoles"],
-    }),
-    updatePermissionConfig: build.mutation<
-      AppAuthConfig,
-      UpdatePermissionConfigRequest
-    >({
-      query: (body) => ({
-        url: "/authorization/config",
-        method: "POST",
-        body,
+      permissionConfig: build.query<PermissionConfigResponse, void>({
+        query: () => ({ url: "/authorization/config", method: "GET" }),
+        providesTags: ["PermissionConfig"],
       }),
-      invalidatesTags: ["CurrentUser", "PermissionConfig"],
-    }),
-    resetPermissionConfig: build.mutation<AppAuthConfig, void>({
-      query: () => ({
-        url: "/authorization/config/reset",
-        method: "POST",
+      securityLevelRoles: build.query<SecurityLevelRolesResponse, void>({
+        query: () => ({
+          url: "/authorization/security-level-roles",
+          method: "GET",
+        }),
+        providesTags: ["SecurityLevelRoles"],
       }),
-      invalidatesTags: ["CurrentUser", "PermissionConfig"],
+      updatePermissionConfig: build.mutation<
+        AppAuthConfig,
+        UpdatePermissionConfigRequest
+      >({
+        query: (body) => ({
+          url: "/authorization/config",
+          method: "POST",
+          body,
+        }),
+        invalidatesTags: ["CurrentUser", "PermissionConfig"],
+      }),
+      resetPermissionConfig: build.mutation<AppAuthConfig, void>({
+        query: () => ({
+          url: "/authorization/config/reset",
+          method: "POST",
+        }),
+        invalidatesTags: ["CurrentUser", "PermissionConfig"],
+      }),
     }),
-  }),
-});
+  });
+}
 
-export const {
-  useCurrentUserQuery,
-  usePermissionConfigQuery,
-  useSecurityLevelRolesQuery,
-  useUpdatePermissionConfigMutation,
-  useResetPermissionConfigMutation,
-} = authApi;
+export type AuthApi = ReturnType<typeof injectAuthEndpoints>;

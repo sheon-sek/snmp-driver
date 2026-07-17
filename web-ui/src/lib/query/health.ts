@@ -1,15 +1,17 @@
-import { useHealthQuery } from "@/lib/api/health";
+import { HealthApi } from "../api/health";
+import { UseHealthOptions } from "../types/api/health";
 
-export type UseHealthOptions = {
-  autoRefresh?: boolean;
-  pollingInterval?: number;
-};
+export function createUseHealth(healthApi: HealthApi) {
+  const { useHealthQuery } = healthApi;
 
-export function useHealth(options: UseHealthOptions = {}) {
-  const { autoRefresh = true, pollingInterval = 5_000 } = options;
+  function useHealth(options: UseHealthOptions = {}) {
+    const { autoRefresh = true, pollingInterval = 5_000 } = options;
 
-  return useHealthQuery(undefined, {
-    pollingInterval: autoRefresh ? pollingInterval : 0,
-    skipPollingIfUnfocused: true,
-  });
+    return useHealthQuery(undefined, {
+      pollingInterval: autoRefresh ? pollingInterval : 0,
+      skipPollingIfUnfocused: true,
+    });
+  }
+
+  return { useHealth };
 }

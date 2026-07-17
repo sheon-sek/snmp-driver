@@ -1,20 +1,39 @@
 import { type ReactNode } from 'react';
 
 import { ShadowBoundary } from './ShadowBoundary';
-import { ThemeProvider } from './ThemeProvider';
+import { ThemeProvider, type ThemeMode } from './ThemeProvider';
 import { Provider as ReduxProvider } from 'react-redux';
-import { store } from '@/store';
-import { Toaster } from'@/components/ui/sonner';
+import type { Store } from '@reduxjs/toolkit';
+import { Toaster, type ToasterProps } from '@/components/ui/sonner';
+import { defaultLanguage, type AppLanguage } from '@/i18n';
 
 interface AppProviderProps {
     children: ReactNode
+    store: Store
+    themeMode?: ThemeMode
+    language?: AppLanguage
+    toasterProps?: ToasterProps | false
 }
-export function AppProvider({ children }:AppProviderProps) {
+export function AppProvider({
+    children,
+    store,
+    themeMode = 'system',
+    language = defaultLanguage,
+    toasterProps = {
+        richColors: true,
+        position: 'top-right',
+    },
+}: AppProviderProps) {
     return (
         <ShadowBoundary>
             <ReduxProvider store={store}>
-                <ThemeProvider>
-					<Toaster richColors position='top-right'/>
+                <ThemeProvider themeMode={themeMode} language={language}>
+                    {toasterProps === false ? null : (
+                        <Toaster
+                            theme={themeMode}
+                            {...toasterProps}
+                        />
+                    )}
                     {children}
                 </ThemeProvider>
             </ReduxProvider>

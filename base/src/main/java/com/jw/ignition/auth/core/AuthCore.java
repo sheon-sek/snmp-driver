@@ -5,16 +5,14 @@ import com.inductiveautomation.ignition.gateway.localdb.persistence.PersistenceI
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
 import com.inductiveautomation.ignition.gateway.web.session.WebUiSession;
 import com.jw.ignition.auth.persistence.AppAuthConfigRecord;
+import com.jw.ignition.common.service.AbstractRuntimeService;
 import com.jw.ignition.common.util.Json;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import simpleorm.dataset.SQuery;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 
-public final class AuthCore {
-    private static final Logger log = LoggerFactory.getLogger(AuthCore.class);
+public final class AuthCore extends AbstractRuntimeService {
     private static final String SECURITY_LEVEL_ROLE_PREFIX = "Authenticated/Roles/";
     private final GatewayContext gatewayContext;
     private final AppAuthOptions options;
@@ -32,19 +30,23 @@ public final class AuthCore {
     // Lifecycle
     // ------------------------------------------------------------
 
-    public void setup() {
+    @Override
+    protected void setupProcess() {
         try {
             gatewayContext.getSchemaUpdater().updatePersistentRecords(AppAuthConfigRecord.META);
+            createConfigIfMissing();
         } catch (Exception e) {
-            throw new IllegalStateException("Failed to setup auth config PersistentRecord schema", e);
+            throw new IllegalStateException("Failed to set up auth config persistence", e);
         }
     }
 
-    public void startup() {
-        loadOrCreateConfig();
+    @Override
+    protected void startupProcess() {
+        loadConfig();
     }
 
-    public void shutdown() {
+    @Override
+    protected void shutdownProcess() {
         // No resources to release in the simple version.
     }
 
@@ -86,7 +88,13 @@ public final class AuthCore {
             Collection<String> securityLevels,
             Collection<String> claims
     ) {
-        return new AppAuthContext(AppAuthSource.PERSPECTIVE_SESSION, username, roles, securityLevels, claims);
+        return new AppAuthContext(
+                AppAuthSource.PERSPECTIVE_SESSION,
+                username,
+                toSecurityLevelRolePaths(roles),
+                securityLevels,
+                claims
+        );
     }
 
     public static String roleAuthority(String rolePath) {
@@ -211,13 +219,22 @@ public final class AuthCore {
         return updateConfig(defaults, actor, expectedRevision);
     }
 
-    private synchronized void loadOrCreateConfig() {
+    private synchronized void createConfigIfMissing() {
+        if (findConfigRecord() != null) {
+            return;
+        }
+
+        AppAuthConfig defaults = AppAuthConfig.defaultConfig(options);
+        insertConfigRecord(defaults, "system");
+        configCache.set(defaults);
+    }
+
+    private synchronized void loadConfig() {
         try {
             AppAuthConfigRecord record = findConfigRecord();
             if (record == null) {
-                AppAuthConfig defaults = AppAuthConfig.defaultConfig(options);
-                insertConfigRecord(defaults, "system");
-                configCache.set(defaults);
+                logger.error("Auth config record is missing after setup. Using in-memory Administrator-only defaults.");
+                configCache.set(AppAuthConfig.defaultConfig(options));
                 return;
             }
 
@@ -226,7 +243,7 @@ public final class AuthCore {
             loaded.setRevision(record.getRevision());
             configCache.set(loaded);
         } catch (Exception e) {
-            log.error("Failed to load auth config. Using in-memory Administrator-only defaults.", e);
+            logger.error("Failed to load auth config. Using in-memory Administrator-only defaults.", e);
             configCache.set(AppAuthConfig.defaultConfig(options));
         }
     }

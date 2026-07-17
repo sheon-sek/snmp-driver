@@ -64,15 +64,12 @@ export function ShadowBoundary({ children }: ShadowBoundaryProps) {
     const shadowRoot = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
 
     let style = shadowRoot.querySelector<HTMLStyleElement>('style[data-eetarp-styles]');
-
     const shadowStyles = `${styles}\n${sonnerStyles}\n${vaulStyles}`;
-
     if (!style) {
       style = document.createElement('style');
       style.dataset.eetarpStyles = '';
       shadowRoot.appendChild(style);
     }
-
     if (style.textContent !== shadowStyles) {
       style.textContent = shadowStyles;
     }
@@ -89,7 +86,6 @@ export function ShadowBoundary({ children }: ShadowBoundaryProps) {
       nextPortalNode = document.createElement('div');
       nextPortalNode.dataset.eetarpPortalRoot = '';
     }
-
     if (nextPortalNode.parentElement !== appRoot) {
       appRoot.appendChild(nextPortalNode);
     }
@@ -100,20 +96,8 @@ export function ShadowBoundary({ children }: ShadowBoundaryProps) {
 
   const content = mountNode
     ? createPortal(
-        <ShadowBoundaryContext.Provider
-          value={{
-            appRootContainer: mountNode,
-            portalContainer: portalNode,
-          }}
-        >
-          <div
-            data-eetarp-shadow-event-boundary
-            onWheel={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            {children}
-          </div>
+        <ShadowBoundaryContext.Provider value={{ appRootContainer: mountNode, portalContainer: portalNode }}>
+          {children}
         </ShadowBoundaryContext.Provider>,
         mountNode,
       )

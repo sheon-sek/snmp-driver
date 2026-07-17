@@ -13,6 +13,40 @@ import {
 import { ApiErrorResponse, ApiResponse } from "../types";
 import { SerializedError } from "@reduxjs/toolkit";
 
+export interface CreateBaseApiOptions {
+  reducerPath?: string;
+  tagTypes?: string[];
+}
+
+export function createBaseApi({
+  reducerPath = "api",
+  tagTypes = [],
+}: CreateBaseApiOptions = {}) {
+  return createApi({
+    reducerPath,
+    baseQuery: dynamicQuery,
+    tagTypes,
+    endpoints: () => ({}),
+  });
+}
+
+export function createAuthBaseApi({
+  reducerPath = "api",
+  tagTypes = [],
+}: CreateBaseApiOptions = {}) {
+  return createBaseApi({
+    reducerPath,
+    tagTypes: [
+      "CurrentUser",
+      "PermissionConfig",
+      "SecurityLevelRoles",
+      ...tagTypes,
+    ],
+  });
+}
+
+export type BaseApi = ReturnType<typeof createBaseApi>;
+
 const rawBaseQuery = fetchBaseQuery({
   credentials: "include",
   prepareHeaders: (headers) => {
@@ -103,12 +137,6 @@ function normalizeApiErrorResponse(
   } as ApiErrorResponse;
 }
 
-export const baseApi = createApi({
-  baseQuery: dynamicQuery,
-  tagTypes: ["CurrentUser", "PermissionConfig", "SecurityLevelRoles"],
-  endpoints: () => ({}),
-});
-
 export function isApiErrorResponse(error: unknown): error is ApiErrorResponse {
   return (
     !!error &&
@@ -129,13 +157,10 @@ export function getApiErrorMessage(
   includeStatus = false,
 ): string {
   if (isApiErrorResponse(error)) {
-    const message = error.error.message === "REQUEST_FAILED"
-      ? fallback
-      : error.error.message;
+    const message =
+      error.error.message === "REQUEST_FAILED" ? fallback : error.error.message;
 
-    return (
-      (includeStatus ? `HTTP ${error.status}: ` : "") + message
-    );
+    return (includeStatus ? `HTTP ${error.status}: ` : "") + message;
   }
 
   if (error?.message) {

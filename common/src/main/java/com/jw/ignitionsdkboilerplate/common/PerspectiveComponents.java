@@ -5,13 +5,14 @@ import java.util.Set;
 import com.inductiveautomation.perspective.common.api.BrowserResource;
 
 public final class PerspectiveComponents {
+    public static final String COMPONENT_CATEGORY = ModuleConstants.MODULE_NAME;
     public static final Set<BrowserResource> BROWSER_RESOURCES = Set.of(
         new BrowserResource(
-            "ignition-sdk-boilerplate-perspective-js",
+            String.format("%s.perspective.js", ModuleConstants.MODULE_ID),
             String.format(
                 "/res/%s/%s",
                 ModuleConstants.MOUNT_ALIAS,
-                ModuleConstants.MODULE_WEBAPP_P_FILENAME
+                ModuleConstants.WebPackages.PERSPECTIVE_FILENAME
             ),
             BrowserResource.ResourceType.JS
         )
