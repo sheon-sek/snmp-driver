@@ -1,4 +1,4 @@
-.boilerplate-page {
+.counter-page {
   display: grid;
   min-height: 100%;
   place-items: center;
@@ -10,12 +10,12 @@
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.boilerplate-page,
-.boilerplate-page * {
+.counter-page,
+.counter-page * {
   box-sizing: border-box;
 }
 
-.boilerplate-page__card {
+.counter-page__card {
   width: min(100%, 36rem);
   padding: clamp(2rem, 6vw, 4rem);
   border: 1px solid #dce3ee;
@@ -25,7 +25,7 @@
   text-align: center;
 }
 
-.boilerplate-page__eyebrow {
+.counter-page__eyebrow {
   margin: 0 0 0.75rem;
   color: #2563eb;
   font-size: 0.75rem;
@@ -34,33 +34,33 @@
   text-transform: uppercase;
 }
 
-.boilerplate-page h1 {
+.counter-page h1 {
   margin: 0;
   font-size: clamp(2rem, 7vw, 3.25rem);
   line-height: 1.05;
 }
 
-.boilerplate-page__description {
+.counter-page__description {
   margin: 1rem auto 2rem;
   color: #5b6578;
   line-height: 1.6;
 }
 
-.boilerplate-page__counter {
+.counter-page__counter {
   margin-bottom: 1.5rem;
   font-size: 4rem;
   font-variant-numeric: tabular-nums;
   font-weight: 750;
 }
 
-.boilerplate-page__actions {
+.counter-page__actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: 0.75rem;
 }
 
-.boilerplate-page button {
+.counter-page button {
   min-width: 6.5rem;
   padding: 0.75rem 1rem;
   border: 1px solid #cbd5e1;
@@ -72,12 +72,12 @@
   cursor: pointer;
 }
 
-.boilerplate-page button:hover {
+.counter-page button:hover {
   border-color: #2563eb;
   color: #1d4ed8;
 }
 
-.boilerplate-page button:focus-visible {
+.counter-page button:focus-visible {
   outline: 3px solid rgb(37 99 235 / 30%);
   outline-offset: 2px;
 }

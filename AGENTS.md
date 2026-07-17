@@ -201,21 +201,22 @@ Run Context7 CLI requests outside Codex's default sandbox. If a Context7 CLI com
 
 ## Project Structure & Module Organization
 
-This is a minimal Ignition 8.3 module template with four Gradle scopes.
-`common/` contains shared module constants and the Perspective component
-descriptor. `gateway/` contains the Gateway hook, one health route, and JSON
-serialization. `designer/` registers the Perspective example component.
-`web-ui/` contains the React 18 + TypeScript + Vite Gateway page and
-Perspective component entry.
+This is an Ignition 8.3 module boilerplate with five Gradle scopes.
+`base/` contains reusable lifecycle, API, and auth infrastructure. `common/`
+contains module constants and the Perspective component descriptor. `gateway/`
+contains module services, routes, navigation, and Perspective registration.
+`designer/` registers the Perspective example component. `web-ui/` contains
+React 18 + TypeScript + Vite targets for webapp, widget, page, and Perspective.
 
 ## Build, Test, and Development Commands
 
 - `.\gradlew.bat build`: builds all module scopes and creates the `.modl`.
+- `.\gradlew.bat :base:test`: runs shared auth/lifecycle JUnit 5 tests.
 - `.\gradlew.bat :gateway:test`: runs Gateway JUnit 5 tests.
 - `yarn --cwd web-ui install`: installs frontend dependencies.
-- `yarn --cwd web-ui run run:dev`: starts Vite on `http://localhost:9999`.
+- `yarn --cwd web-ui run dev`: starts Vite on `http://localhost:9999`.
 - `yarn --cwd web-ui run lint`: runs TypeScript validation.
-- `yarn --cwd web-ui run build`: builds Gateway and Perspective bundles.
+- `yarn --cwd web-ui run build`: builds all embedded frontend targets.
 
 All commands must run with repository root as the current workdir.
 Do not run build, test, lint, typecheck, compile, package, or similar
@@ -223,27 +224,28 @@ verification without explicit user authorization.
 
 ## Coding Style & Naming Conventions
 
-Java targets JDK 17. Keep packages under `com.jw.ignitionsdktemplate`.
+Java targets JDK 17. Module-specific packages currently use
+`com.jw.ignitionsdkboilerplate`; reusable `base` packages use `com.jw.ignition`.
 Use PascalCase for Java classes and React components, camelCase for methods,
 fields, hooks, and utilities. Keep the boilerplate minimal; add dependencies
 and abstractions only when an example requires them.
 
 ## Testing Guidelines
 
-Backend tests use JUnit Jupiter and live under `gateway/src/test/java`.
-Use `*Test.java` names. The health route payload is the only baseline backend
-behavior. Frontend verification uses TypeScript checks unless a test runner is
-explicitly added later.
+Backend tests use JUnit Jupiter under `base/src/test/java` and
+`gateway/src/test/java`. Use `*Test.java` names. Baseline coverage includes
+shared auth/lifecycle behavior and the Gateway health payload. Frontend
+verification uses TypeScript checks unless a test runner is explicitly added.
 
 ## Security & Configuration Tips
 
-Do not commit credentials, Gateway exports, signing keys, or local `.env`
-files. Use `web-ui/.env.example` as the frontend environment template.
-Development builds are unsigned and are not production artifacts. Keep API
-routes under `/data/ignition-sdk-template/api/v1`.
+Do not commit credentials, Gateway exports, signing keys, or local `.env.local`
+files. `web-ui/.env.dev` is the tracked Vite development configuration.
+Development builds are unsigned and are not production artifacts. Embedded API
+routes currently use `/data/ignition-sdk-boilerplate/api/v1`.
 
 ## Workdir
 
 Always use
-`D:\EETARP\01_Projects\_IgnitionEngineeringTools\tutorials\ignition-sdk-template`
+`D:\EETARP\01_Projects\_IgnitionEngineeringTools\tutorials\ignition-sdk-boilerplate`
 as repository root and use absolute paths for all file operations.

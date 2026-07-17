@@ -7,10 +7,12 @@ import com.inductiveautomation.ignition.designer.model.AbstractDesignerModuleHoo
 import com.inductiveautomation.ignition.designer.model.DesignerContext;
 import com.inductiveautomation.perspective.designer.DesignerComponentRegistry;
 import com.inductiveautomation.perspective.designer.api.PerspectiveDesignerInterface;
+import com.jw.ignitionsdkboilerplate.common.ModuleConstants;
 import com.jw.ignitionsdkboilerplate.common.component.ExampleWebApp;
 
 public class DesignerHook extends AbstractDesignerModuleHook {
-    private static final LoggerEx logger = LoggerEx.newBuilder().build("IgnitionBoilerplateComponents");
+    private static final LoggerEx logger = LoggerEx.newBuilder()
+            .build(ModuleConstants.MODULE_ID + ".DesignerComponents");
 
     private DesignerComponentRegistry registry;
 

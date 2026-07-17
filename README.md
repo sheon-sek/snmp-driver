@@ -94,7 +94,7 @@ Ignition Gateway / Designer / Perspective 共用常量和 component descriptor�
 com.jw.ignitionsdkboilerplate
 ```
 
-当前 mount alias / nav path 使用历史拼写：
+当前 mount alias / nav path：
 
 ```text
 ignition-sdk-boilerplate
@@ -125,10 +125,12 @@ Designer scope。当前只负责在 Designer 中注册 Perspective component des
 
 ### `web-ui`
 
-React + Vite frontend。它同时服务两个入口：
+React + Vite frontend。它提供四类 build target：
 
-- Gateway navigation page
-- Perspective example component
+- Gateway webapp
+- reusable widget
+- independent page
+- Perspective component
 
 关键目录：
 
@@ -525,26 +527,26 @@ perspective.js
 
 `vite.inline-css.ts` 会把 Vite 输出 CSS inline 到 UMD chunk，并从 Rollup bundle 中移除 CSS asset。它不删除磁盘文件。
 
-`page` 是独立页面 target，不包含 webapp 的 router/sidebar/application shell。每个页面放在 `web-ui/src/packages/page/<page-name>` 独立 subfolder，可由 Gateway mount，或由 Perspective wrapper 复用。默认 counter 位于 `web-ui/src/packages/page/counter`；`page.js` 将它导出为 `IgnitionSdkBoilerplatePage`，Gateway 挂载路径为 `/ignition-sdk-boilerplate/counter`。Gateway 或 Perspective host 负责 React root，page package 本身不调用 `createRoot`。
+`page` 是独立页面 target，不包含 webapp 的 router/sidebar/application shell。每个页面放在 `web-ui/src/packages/page/<page-name>` 独立 subfolder；`web-ui/src/packages/page/index.ts` 只作为 build entry，以 named export 暴露各个页面，不提供 default export。默认 counter 位于 `web-ui/src/packages/page/counter`，导出名为 `IgnitionSdkBoilerplateCounterPage`，Gateway 挂载路径为 `/ignition-sdk-boilerplate/counter`。Gateway 或 Perspective host 负责 React root，page package 本身不调用 `createRoot`。
 
 ## Quick Start
 
 所有命令必须从 repo root 运行。
 
 ```powershell
-Set-Location -LiteralPath "D:\EETARP\01_Projects\_IgnitionEngineeringTools\tutorials\ignition-sdk-boilerplate"
+Set-Location -LiteralPath "<repo-root>"
 ```
 
 ### 1. Install frontend dependencies
 
 ```powershell
-yarn --cwd "D:\EETARP\01_Projects\_IgnitionEngineeringTools\tutorials\ignition-sdk-boilerplate\web-ui" install
+yarn --cwd ".\web-ui" install
 ```
 
 ### 2. Start frontend dev server
 
 ```powershell
-yarn --cwd "D:\EETARP\01_Projects\_IgnitionEngineeringTools\tutorials\ignition-sdk-boilerplate\web-ui" run dev
+yarn --cwd ".\web-ui" run dev
 ```
 
 Default dev URL:
@@ -593,7 +595,7 @@ com.jw.ignitionsdkboilerplate-1.1.0-beta5.modl
 ### 5. Frontend typecheck
 
 ```powershell
-yarn --cwd "D:\EETARP\01_Projects\_IgnitionEngineeringTools\tutorials\ignition-sdk-boilerplate\web-ui" run lint
+yarn --cwd ".\web-ui" run lint
 ```
 
 这里的 `lint` 是 TypeScript `tsc --noEmit`，不是 ESLint。
@@ -692,8 +694,7 @@ npx shadcn@3.8.5 add <component>
   - `MODULE_NAME`
   - `MOUNT_ALIAS`
   - `API_PREFIX`
-  - `GATEWAY_NAV_CATEGORY_ID`
-  - `WebPackages`
+  - `WebPackages` 中的 mounted export name
 - `AuthConstants.java`
   - `AUTH_NAMESPACE`
   - `PERSISTENCE_PREFIX`
@@ -701,6 +702,8 @@ npx shadcn@3.8.5 add <component>
   - `COMPONENT_ID`
   - `COMPONENT_NAME`
   - default meta name
+- `common/src/main/resources/example-webapp.props.json`
+  - default API base
 - `PerspectiveComponents.java`
   - browser resource ID
 
@@ -711,17 +714,28 @@ npx shadcn@3.8.5 add <component>
   - `version`
 - `web-ui/scripts/build-targets.mts`
   - API base
-  - output filename
   - UMD library name
-  - source entry
+  - output filename/source entry 通常保持通用名，不需随项目改名
 - `web-ui/.env.dev`
   - `VITE_API_BASE_URL`
 - `web-ui/index.html`
-  - dev mount root
+  - dev page title
+- `web-ui/src/packages/webapp/index.ts`
+  - mounted webapp export name
+- `web-ui/src/packages/page/index.ts`
+  - mounted page export name
 - `web-ui/src/packages/perspective/example-webapp-wrapper/index.tsx`
   - component type and props reducer
 - `web-ui/src/i18n/locales/*/common.json`
   - app title and copy
+- `gateway/src/main/java/com/jw/ignitionsdkboilerplate/gateway/GatewayHook.java`
+  - page label/path；mounted export name 从 `ModuleConstants.WebPackages` 读取
+- `AGENTS.md`
+  - package、API path、repo workdir
+- `license.html`
+  - module title and license copy
+
+`vite.config.ts` 的 style ID 从各 target 的 `libName` 自动生成，不需要另改 hardcoded project prefix。
 
 ### URLs and IDs
 
@@ -732,11 +746,21 @@ ignition-sdk-boilerplate
 IgnitionSdkBoilerplateWebApp
 IgnitionSdkBoilerplateWidget
 IgnitionSdkBoilerplatePage
+IgnitionSdkBoilerplateCounterPage
 IgnitionSdkBoilerplatePerspective
+IgnitionSDKBoilerplate
 com.jw.ignitionsdkboilerplate
 ignitionboilerplate.example-webapp
 Ignition SDK Boilerplate
 ```
+
+重命名完成后，在 tracked files 做残留检查：
+
+```powershell
+git grep -n -i -E "boilerplate|com\.jw\.ignitionsdkboilerplate|ignitionboilerplate"
+```
+
+结果应只剩你明确决定保留的通用说明；不要忽略 README、`AGENTS.md`、schema、locale 或 license。
 
 ## Long-running Acceptance Gate
 

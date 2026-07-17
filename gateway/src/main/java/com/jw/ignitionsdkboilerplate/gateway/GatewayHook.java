@@ -103,7 +103,7 @@ public class GatewayHook extends AbstractGatewayModuleHook {
                     .position(10)
                     .mount(
                         "%s/webapp".formatted(ModuleConstants.MOUNT_ALIAS),
-                        "IgnitionSdkBoilerplateWebApp",
+                        ModuleConstants.WebPackages.WEBAPP_EXPORT_NAME,
                         webappJsModule
                     )
                 )
@@ -111,7 +111,7 @@ public class GatewayHook extends AbstractGatewayModuleHook {
                     .position(20)
                     .mount(
                         "%s/counter".formatted(ModuleConstants.MOUNT_ALIAS),
-                        "IgnitionSdkBoilerplatePage",
+                        ModuleConstants.WebPackages.COUNTER_PAGE_EXPORT_NAME,
                         pageJsModule
                     )
                 )

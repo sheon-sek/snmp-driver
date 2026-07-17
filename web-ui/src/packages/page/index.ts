@@ -1,5 +1,1 @@
-export {
-  CounterPage as default,
-  CounterPage,
-  CounterPage as IgnitionSdkBoilerplatePage,
-} from "./counter";
+export { CounterPage as IgnitionSdkBoilerplateCounterPage } from "./counter";

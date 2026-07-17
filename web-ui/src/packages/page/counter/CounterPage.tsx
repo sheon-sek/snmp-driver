@@ -6,19 +6,19 @@ export function CounterPage() {
   const [count, setCount] = useState(0);
 
   return (
-    <main className="boilerplate-page">
-      <section className="boilerplate-page__card">
-        <p className="boilerplate-page__eyebrow">Ignition SDK Boilerplate</p>
+    <main className="counter-page">
+      <section className="counter-page__card">
+        <p className="counter-page__eyebrow">Gateway Module Example</p>
         <h1>Standalone React Page</h1>
-        <p className="boilerplate-page__description">
+        <p className="counter-page__description">
           This page can be mounted by the Gateway or wrapped as a Perspective component.
         </p>
 
-        <div className="boilerplate-page__counter" aria-live="polite">
+        <div className="counter-page__counter" aria-live="polite">
           {count}
         </div>
 
-        <div className="boilerplate-page__actions">
+        <div className="counter-page__actions">
           <button type="button" onClick={() => setCount((value) => value - 1)}>
             Decrease
           </button>

@@ -22,7 +22,7 @@ export interface HealthCardWidgetProps {
 
 export function HealthCardWidget({
   apiBase = import.meta.env.VITE_API_BASE_URL,
-  title = "Ignition SDK Boilerplate Health",
+  title = "Gateway Module Health",
 }: HealthCardWidgetProps) {
   return (
     <HealthCardWidgetInstance key={apiBase} apiBase={apiBase} title={title} />
