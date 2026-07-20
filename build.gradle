@@ -56,6 +56,10 @@ ignitionModule {
             ':web-ui'   : 'G',
     ])
 
+    moduleDependencies.putAll([
+            'com.inductiveautomation.opcua': 'G',
+    ])
+
     def gatewayHookClass = "${property('moduleId')}.gateway.GatewayHook".toString()
     hooks.putAll([
         (gatewayHookClass) : 'G',

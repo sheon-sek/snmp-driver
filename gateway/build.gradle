@@ -14,9 +14,13 @@ java {
 dependencies {
     compileOnly "com.inductiveautomation.ignitionsdk:ignition-common:${ignitionVersion}"
     compileOnly "com.inductiveautomation.ignitionsdk:gateway-api:${ignitionVersion}"
+    compileOnly "com.inductiveautomation.ignitionsdk:driver-api:${ignitionVersion}"
     compileOnly project(':base')
     compileOnly project(':common')
 
+    implementation "org.snmp4j:snmp4j:3.12.2"
+
+    modlImplementation "org.snmp4j:snmp4j:3.12.2"
     modlImplementation project(':web-ui')
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.3'

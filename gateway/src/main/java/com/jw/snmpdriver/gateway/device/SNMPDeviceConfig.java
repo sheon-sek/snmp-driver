@@ -1,0 +1,68 @@
+package com.jw.snmpdriver.gateway.device;
+
+import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.DefaultValue;
+import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.FormCategory;
+import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.FormField;
+import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.IsNullable;
+import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.Label;
+import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.Required;
+import com.inductiveautomation.ignition.gateway.secrets.SecretConfig;
+import com.inductiveautomation.ignition.gateway.web.nav.FormFieldType;
+
+public record SNMPDeviceConfig(
+        @FormCategory("CONNECTION") @Label("Host*") @FormField(FormFieldType.TEXT)
+        @DefaultValue("") @Required String host,
+        @FormCategory("CONNECTION") @Label("Port*") @FormField(FormFieldType.NUMBER)
+        @DefaultValue("161") @Required int port,
+        @FormCategory("CONNECTION") @Label("IP Family*") @FormField(FormFieldType.SELECT)
+        @DefaultValue("AUTO") @Required IpFamily ipFamily,
+        @FormCategory("PROTOCOL") @Label("SNMP Version*") @FormField(FormFieldType.SELECT)
+        @DefaultValue("V3") @Required Version version,
+        @FormCategory("PROTOCOL") @Label("Read Community") @FormField(FormFieldType.SECRET)
+        @DefaultValue("null") @IsNullable SecretConfig readCommunity,
+        @FormCategory("PROTOCOL") @Label("Write Community") @FormField(FormFieldType.SECRET)
+        @DefaultValue("null") @IsNullable SecretConfig writeCommunity,
+        @FormCategory("V3_SECURITY") @Label("Security Name") @FormField(FormFieldType.TEXT)
+        @DefaultValue("") String securityName,
+        @FormCategory("V3_SECURITY") @Label("Security Level*") @FormField(FormFieldType.SELECT)
+        @DefaultValue("AUTH_PRIV") @Required SecurityLevel securityLevel,
+        @FormCategory("V3_SECURITY") @Label("Auth Protocol*") @FormField(FormFieldType.SELECT)
+        @DefaultValue("SHA256") @Required AuthProtocol authProtocol,
+        @FormCategory("V3_SECURITY") @Label("Auth Passphrase") @FormField(FormFieldType.SECRET)
+        @DefaultValue("null") @IsNullable SecretConfig authPassphrase,
+        @FormCategory("V3_SECURITY") @Label("Privacy Protocol*") @FormField(FormFieldType.SELECT)
+        @DefaultValue("AES128") @Required PrivacyProtocol privacyProtocol,
+        @FormCategory("V3_SECURITY") @Label("Privacy Passphrase") @FormField(FormFieldType.SECRET)
+        @DefaultValue("null") @IsNullable SecretConfig privacyPassphrase,
+        @FormCategory("V3_SECURITY") @Label("Context Name") @FormField(FormFieldType.TEXT)
+        @DefaultValue("") String contextName,
+        @FormCategory("ACCESS") @Label("Access Mode*") @FormField(FormFieldType.SELECT)
+        @DefaultValue("READ_ONLY") @Required AccessMode accessMode,
+        @FormCategory("RUNTIME") @Label("Timeout (ms)*") @FormField(FormFieldType.NUMBER)
+        @DefaultValue("2000") @Required long timeoutMillis,
+        @FormCategory("RUNTIME") @Label("Retries*") @FormField(FormFieldType.NUMBER)
+        @DefaultValue("1") @Required int retries,
+        @FormCategory("RUNTIME") @Label("Max OIDs per Request*") @FormField(FormFieldType.NUMBER)
+        @DefaultValue("25") @Required int maxOidsPerRequest,
+        @FormCategory("RUNTIME") @Label("Max Request Bytes*") @FormField(FormFieldType.NUMBER)
+        @DefaultValue("1200") @Required int maxRequestBytes,
+        @FormCategory("RUNTIME") @Label("Max In-flight Requests*") @FormField(FormFieldType.NUMBER)
+        @DefaultValue("2") @Required int maxInflightPerDevice
+) {
+    public enum Version { V1, V2C, V3 }
+    public enum IpFamily { AUTO, IPV4, IPV6 }
+    public enum SecurityLevel { NO_AUTH_NO_PRIV, AUTH_NO_PRIV, AUTH_PRIV }
+    public enum AuthProtocol { MD5, SHA1, SHA224, SHA256, SHA384, SHA512 }
+    public enum PrivacyProtocol { DES, AES128, AES192, AES256 }
+    public enum AccessMode { READ_ONLY, READ_WRITE }
+
+    public static SNMPDeviceConfig defaults() {
+        return new SNMPDeviceConfig(
+                "", 161, IpFamily.AUTO, Version.V3, null, null, "",
+                SecurityLevel.AUTH_PRIV, AuthProtocol.SHA256, null,
+                PrivacyProtocol.AES128, null, "", AccessMode.READ_ONLY,
+                2_000L, 1, 25, 1_200, 2
+        );
+    }
+}
+

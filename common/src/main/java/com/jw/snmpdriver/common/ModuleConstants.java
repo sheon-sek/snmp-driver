@@ -6,10 +6,17 @@ public final class ModuleConstants {
 
     public static final String MOUNT_ALIAS = "snmp-driver";
     public static final String API_PREFIX = "/api/v1";
+    public static final String MODULE_API_PREFIX = API_PREFIX;
+    public static final String DEVICE_TYPE_ID = "com.jw.snmpdriver.snmp-device";
+    public static final int MIN_SAMPLING_INTERVAL_MS = 1_000;
 
     public static final String GATEWAY_NAV_CATEGORY_ID = MOUNT_ALIAS;
 
     private ModuleConstants() {
+    }
+
+    public static String getPersistentRecordPrefix() {
+        return MODULE_NAME.trim().replace(" ", "");
     }
 
     public static final class WebPackages {

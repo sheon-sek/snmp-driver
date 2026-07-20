@@ -1,35 +1,46 @@
 package com.jw.snmpdriver.gateway;
 
+import java.util.List;
 import java.util.Optional;
 
+import com.inductiveautomation.ignition.common.BundleUtil;
 import com.inductiveautomation.ignition.common.licensing.LicenseState;
 import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
-import com.inductiveautomation.ignition.gateway.model.AbstractGatewayModuleHook;
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
+import com.inductiveautomation.ignition.gateway.opcua.server.api.AbstractDeviceModuleHook;
+import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceExtensionPoint;
 import com.inductiveautomation.ignition.gateway.web.systemjs.SystemJsModule;
 import com.jw.snmpdriver.common.ModuleConstants;
+import com.jw.snmpdriver.gateway.device.SNMPDevice;
+import com.jw.snmpdriver.gateway.device.SNMPDeviceExtensionPoint;
 import com.jw.snmpdriver.gateway.license.LicenseManagementRouteRegistrar;
 import com.jw.snmpdriver.gateway.service.ServiceBundle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class GatewayHook extends AbstractGatewayModuleHook {
+public final class GatewayHook extends AbstractDeviceModuleHook {
     private static final Logger logger = LoggerFactory.getLogger(GatewayHook.class);
 
-    private GatewayContext context;
     private final ServiceBundle services = new ServiceBundle();
+    private final SNMPDeviceExtensionPoint extensionPoint = new SNMPDeviceExtensionPoint(services);
+
+    private GatewayContext context;
+    private boolean bundleRegistered;
 
     @Override
     public void setup(GatewayContext context) {
         this.context = context;
 
         try {
+            super.setup(context);
+            BundleUtil.get().addBundle(SNMPDevice.class);
+            bundleRegistered = true;
             services.setup(context);
             registerGatewayPages();
         } catch (RuntimeException | Error error) {
             logger.error("'{}' module setup failed.", ModuleConstants.MODULE_NAME, error);
+            cleanupServicesAndBundle(error);
             this.context = null;
-            rollback(error);
             throw error;
         }
     }
@@ -37,19 +48,43 @@ public class GatewayHook extends AbstractGatewayModuleHook {
     @Override
     public void startup(LicenseState activationState) {
         try {
+            super.startup(activationState);
             services.startup();
         } catch (RuntimeException | Error error) {
             logger.error("'{}' module startup failed.", ModuleConstants.MODULE_NAME, error);
+            cleanupServicesAndBundle(error);
             context = null;
-            rollback(error);
             throw error;
         }
     }
 
     @Override
     public void shutdown() {
+        Throwable failure = null;
+
+        try {
+            services.shutdown();
+        } catch (RuntimeException | Error error) {
+            failure = error;
+            logger.error("SNMP Driver service shutdown failed", error);
+        }
+
+        failure = removeBundle(failure);
+
+        try {
+            super.shutdown();
+        } catch (RuntimeException | Error error) {
+            failure = merge(failure, error);
+            logger.error("SNMP Driver module shutdown failed", error);
+        }
+
         context = null;
-        rollback(null);
+        rethrow(failure);
+    }
+
+    @Override
+    protected List<DeviceExtensionPoint<?>> getDeviceExtensionPoints() {
+        return List.of(extensionPoint);
     }
 
     @Override
@@ -100,25 +135,38 @@ public class GatewayHook extends AbstractGatewayModuleHook {
             );
     }
 
-    private void rollback(Throwable cause) {
-        Throwable failure = cause;
-
+    private void cleanupServicesAndBundle(Throwable cause) {
         try {
             services.shutdown();
-        } catch (RuntimeException | Error error) {
-            failure = merge(failure, error);
+        } catch (RuntimeException | Error cleanupError) {
+            cause.addSuppressed(cleanupError);
+            logger.warn("SNMP Driver service cleanup failed", cleanupError);
+        }
+        removeBundle(cause);
+    }
+
+    private Throwable removeBundle(Throwable failure) {
+        if (!bundleRegistered) {
+            return failure;
         }
 
-        if (cause == null) {
-            rethrow(failure);
+        try {
+            BundleUtil.get().removeBundle(SNMPDevice.class);
+            bundleRegistered = false;
+        } catch (RuntimeException | Error error) {
+            failure = merge(failure, error);
+            logger.warn("SNMP Driver bundle cleanup failed", error);
         }
+        return failure;
     }
 
     private static Throwable merge(Throwable failure, Throwable next) {
         if (failure == null) {
             return next;
         }
-        failure.addSuppressed(next);
+        if (failure != next) {
+            failure.addSuppressed(next);
+        }
         return failure;
     }
 
