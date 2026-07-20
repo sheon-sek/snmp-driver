@@ -504,7 +504,9 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             return;
         }
         SnmpFailureClassifier.Failure failure = SnmpFailureClassifier.classify(error);
-        if (failure.legalResponse()) {
+        if ("license".equals(failure.category())) {
+            setStatus("Unlicensed");
+        } else if (failure.legalResponse()) {
             markRunning();
         } else if (failure.circuitFailure()) {
             setStatus("Degraded");
@@ -522,7 +524,9 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             return;
         }
         status = nextStatus;
-        if ("Degraded".equals(nextStatus) || "Errored".equals(nextStatus)) {
+        if ("Unlicensed".equals(nextStatus)
+                || "Degraded".equals(nextStatus)
+                || "Errored".equals(nextStatus)) {
             logger.warn(
                     "SNMP Device status transition device={} host={} port={} version={} from={} to={}",
                     context.getName(), config.host(), config.port(), config.version(),
@@ -609,4 +613,3 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         }
     }
 }
-

@@ -15,8 +15,10 @@ import com.jw.ignition.common.license.ModuleLicenseRuntime;
 import com.jw.ignition.common.service.AbstractBundle;
 import com.jw.snmpdriver.common.ModuleConstants;
 import com.jw.snmpdriver.snmp.runtime.DnsResolver;
+import com.jw.snmpdriver.snmp.runtime.LicensedSnmpRequestClient;
 import com.jw.snmpdriver.snmp.runtime.SharedPollCoordinator;
 import com.jw.snmpdriver.snmp.runtime.Snmp4jRequestClient;
+import com.jw.snmpdriver.snmp.runtime.SnmpRequestClient;
 
 public final class ServiceBundle extends AbstractBundle {
     private static final AtomicInteger POLL_THREAD_ID = new AtomicInteger();
@@ -27,7 +29,7 @@ public final class ServiceBundle extends AbstractBundle {
     private GatewayContext context;
     private ModuleLicenseRuntime license;
     private DnsResolver dnsResolver;
-    private Snmp4jRequestClient requestClient;
+    private SnmpRequestClient requestClient;
     private ScheduledExecutorService scheduler;
     private SharedPollCoordinator runtime;
 
@@ -97,7 +99,10 @@ public final class ServiceBundle extends AbstractBundle {
         state = State.STARTING;
         try {
             dnsResolver = new DnsResolver();
-            requestClient = new Snmp4jRequestClient(dnsResolver);
+            requestClient = new LicensedSnmpRequestClient(
+                    new Snmp4jRequestClient(dnsResolver),
+                    license()
+            );
             scheduler = Executors.newScheduledThreadPool(2, runnable -> {
                 Thread thread = new Thread(
                         runnable,

@@ -35,6 +35,16 @@ public final class SnmpFailureClassifier {
                     true
             );
         }
+        if (root instanceof SnmpLicenseException) {
+            return failure(
+                    "license",
+                    root,
+                    StatusCodes.Bad_UserAccessDenied,
+                    false,
+                    false,
+                    false
+            );
+        }
         if (root instanceof SnmpValueException valueError) {
             return failure(
                     valueError.category(),
@@ -168,7 +178,8 @@ public final class SnmpFailureClassifier {
 
     public static boolean safeToLogStack(Throwable error) {
         Throwable root = unwrap(error);
-        return !(root instanceof MessageException)
+        return !(root instanceof SnmpLicenseException)
+                && !(root instanceof MessageException)
                 && !(root instanceof SecurityException)
                 && !(root instanceof IllegalArgumentException);
     }
@@ -204,6 +215,7 @@ public final class SnmpFailureClassifier {
             case "transport" -> "SNMP transport I/O failed";
             case "shutdown" -> "SNMP operation was cancelled by shutdown or generation change";
             case "resource" -> "SNMP runtime resource is unavailable";
+            case "license" -> "SNMP Driver license is not valid";
             case "configuration" -> "SNMP configuration is invalid";
             case "message-processing" -> "SNMP message processing failed";
             default -> "Unexpected SNMP runtime failure";
@@ -289,4 +301,3 @@ public final class SnmpFailureClassifier {
         }
     }
 }
-
