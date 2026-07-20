@@ -234,6 +234,11 @@ GET  /authorization/config
 POST /authorization/config
 POST /authorization/config/reset
 GET  /authorization/security-level-roles
+GET  /license/access
+GET  /license/status
+GET  /license/machine-request
+POST /license/upload
+POST /license/revalidate
 ```
 
 成功响应：
@@ -347,6 +352,7 @@ gateway/src/main/java/com/jw/ignitionsdkboilerplate/gateway/auth/AppPermission.j
 ```text
 authorization.manage
 health.access
+license.manage
 ```
 
 `AuthCore` cache 不直接暴露 mutable config。读写 API 都经过 deep-copy boundary；保存后 caller 无法绕过 revision/persistence 修改 cached config。
@@ -411,6 +417,10 @@ route 可配置：
 
 ```ts
 requiredPermissions?: string[]
+requiredLicense?: false | true | {
+  features: [string, ...string[]]
+  match?: "all" | "any"
+}
 showInNav?: boolean
 children?: AppRouteDefinition[]
 ```
@@ -664,6 +674,122 @@ npx shadcn@3.8.5 add <component>
 4. 必要时传入 `WebApp`。
 5. 如影响 API base/session/theme/language，检查 `embedContext.ts` 和 `ThemeProvider.tsx`。
 
+## Custom License Framework
+
+License core 位于：
+
+```text
+base/src/main/java/com/jw/ignition/license
+```
+
+该目录必须保持原样。Module 通过 `com.jw.ignition.common.license` 的 runtime/integration layer 使用它，不直接修改 verifier、upload、file store、audit 或 renderer。
+
+### Runtime boundary
+
+- 管理面始终运行：`/auth/**`、`/authorization/**`、`/license/**`、Gateway License page。
+- 业务面 fail-closed：业务 API、webapp route、独立业务 page、Perspective 内业务页面、后台任务。
+- `GatewayHook.isFreeModule()` 保持 `true`；它表示不使用 Ignition 原生 module license。本项目使用自定义 RSA license。
+- startup 执行完整验证；每次业务访问检查 license 文件变化和 expiry；5 秒 monitor 覆盖无请求场景。
+- license 文件路径：`<Ignition data>/<mountAlias>/license/license.json`。
+- License Gateway page：`/<mountAlias>/license`。
+- Legacy `GET /license/page` 不注册；`LicensePageRenderer` 仅为 immutable core 保留源码。
+
+### Backend declaration
+
+仅要求 Licensed：
+
+```java
+json(
+    routes,
+    HttpMethod.GET,
+    "/reports",
+    true,
+    AppPermission.REPORT_ACCESS,
+    LicenseRequirement.licensed(),
+    reportRoutes::list
+);
+```
+
+Feature：
+
+```java
+LicenseRequirement.allFeatures("report.export", "report.schedule");
+LicenseRequirement.anyFeatures("report.basic", "report.pro");
+```
+
+固定 gate 顺序：authenticated -> permission -> license -> handler。注入 `ModuleLicenseRuntime` 的 module-specific registrar 默认要求 Licensed，防止新增 endpoint 漏写时放行；显式 `LicenseRequirement` 用于声明 feature。Feature key 自动 trim/lowercase；多 feature 默认 all-of，any-of 必须显式。
+
+后台任务每轮工作前检查：
+
+```java
+if (!services.license().allows(
+        LicenseRequirement.allFeatures("report.schedule")
+)) {
+    return;
+}
+```
+
+### Frontend declaration
+
+仅要求 Licensed：
+
+```tsx
+requiredLicense: true
+```
+
+默认 all-of：
+
+```tsx
+requiredLicense: {
+  features: ["report.export", "report.schedule"],
+}
+```
+
+显式 any-of：
+
+```tsx
+requiredLicense: {
+  features: ["report.basic", "report.pro"],
+  match: "any",
+}
+```
+
+`RouteGuard` 与 sidebar 使用同一 evaluator。Parent route 的 requirement 自动继承到 child route。局部组件使用 `AppLicenseGuard`；独立业务 page 使用 `StandaloneLicenseGuard`。Vite DEV 可跳过 UI guard，Gateway backend 永不跳过。
+
+Root route 未声明时默认要求 Licensed。只有 auth、authorization、license management 等 control-plane route 才显式使用 `requiredLicense: false`；这可避免新增业务 route 漏写字段时被放行。
+
+局部 webapp/Perspective 组件使用简化 wrapper：
+
+```tsx
+import { AppLicenseGuard } from "./components/auth/AppLicenseGuard";
+
+<AppLicenseGuard
+  requiredLicense={{ features: ["report.export"], match: "all" }}
+>
+  <ReportExportPanel />
+</AppLicenseGuard>
+```
+
+`AppLicenseGuard` 自动复用当前 API runtime、authenticated session 与统一 license 拒绝页；组件不需要自行请求 license status。
+
+### Clone checklist
+
+1. 修改 Gradle module metadata 与 `ModuleConstants`。
+2. License generator 使用新 `moduleId`。
+3. 需要 feature 时，在 Java/TypeScript 定义同名常量。
+4. 每个业务 endpoint 填 `LicenseRequirement`。
+5. 每个业务 route/component 填 `requiredLicense`。
+6. 不修改 immutable license core。
+
+### License acceptance matrix
+
+- missing/invalid/expired/wrong-module/machine-mismatch：管理面可用，业务面拒绝。
+- 上传有效 license：无需 restart 即激活。
+- 删除、替换或到期：业务自动拒绝。
+- `license.manage`：控制完整 status、machine request、upload、revalidate。
+- `/license/access`：仅返回安全 access snapshot，不返回 machine identifier 或 license path。
+- 重复 module restart：不得产生重复 monitor/thread。
+
 ## Rename Checklist
 
 重命名整个项目不能只改 `moduleName`。至少检查以下位置。
@@ -724,6 +850,8 @@ npx shadcn@3.8.5 add <component>
   - mounted webapp export name
 - `web-ui/src/packages/page/index.ts`
   - mounted page export name
+- `web-ui/src/packages/page/license/LicensePage.tsx`
+  - `MODULE_NAME` fallback 与 license page copy
 - `web-ui/src/packages/perspective/example-webapp-wrapper/index.tsx`
   - component type and props reducer
 - `web-ui/src/i18n/locales/*/common.json`
@@ -732,8 +860,8 @@ npx shadcn@3.8.5 add <component>
   - page label/path；mounted export name 从 `ModuleConstants.WebPackages` 读取
 - `AGENTS.md`
   - package、API path、repo workdir
-- `license.html`
-  - module title and license copy
+- `base/src/main/java/com/jw/ignition/license`
+  - immutable；重命名 module 时仍不得修改
 
 `vite.config.ts` 的 style ID 从各 target 的 `libName` 自动生成，不需要另改 hardcoded project prefix。
 
@@ -747,6 +875,7 @@ IgnitionSdkBoilerplateWebApp
 IgnitionSdkBoilerplateWidget
 IgnitionSdkBoilerplatePage
 IgnitionSdkBoilerplateCounterPage
+IgnitionSdkBoilerplateLicensePage
 IgnitionSdkBoilerplatePerspective
 IgnitionSDKBoilerplate
 com.jw.ignitionsdkboilerplate
@@ -789,6 +918,8 @@ git grep -n -i -E "boilerplate|com\.jw\.ignitionsdkboilerplate|ignitionboilerpla
 - Do not directly fetch from page components.
 - Do not add another state library; use Redux Toolkit for shared app state and RTK Query for server state.
 - Do not bypass `RouteGuard` for production routes.
+- Do not modify `base/src/main/java/com/jw/ignition/license`; integrate through `common.license`.
+- Require every business endpoint, route, standalone page, and background task to declare license access.
 - Do not invent alternate role catalogs; use Ignition Security Levels `Authenticated/Roles`.
 - Keep Perspective and Gateway render paths using the same `WebApp` where possible.
 - Preserve Shadow DOM styling boundary unless there is a concrete host-integration reason to change it.
@@ -797,6 +928,6 @@ git grep -n -i -E "boilerplate|com\.jw\.ignitionsdkboilerplate|ignitionboilerpla
 ## Known Current Notes
 
 - `.env.dev` uses `/data/dev/api/v1`; embedded builds inject `/data/ignition-sdk-boilerplate/api/v1`.
-- `RouteGuard` bypasses auth checks in Vite dev mode through `import.meta.env.DEV`.
+- `RouteGuard` bypasses auth/license UI checks in Vite dev mode through `import.meta.env.DEV`; Gateway backend remains enforced.
 - `lint` means TypeScript validation only.
 - Build output is development unsigned `.modl` because signing is skipped.

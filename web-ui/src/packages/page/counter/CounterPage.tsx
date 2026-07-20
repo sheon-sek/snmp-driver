@@ -1,8 +1,17 @@
 import { useState } from "react";
+import { StandaloneLicenseGuard } from "@/components/foundation/StandaloneLicenseGuard";
 
 import "./page.css";
 
 export function CounterPage() {
+  return (
+    <StandaloneLicenseGuard requiredLicense>
+      <CounterPageContent />
+    </StandaloneLicenseGuard>
+  );
+}
+
+function CounterPageContent() {
   const [count, setCount] = useState(0);
 
   return (

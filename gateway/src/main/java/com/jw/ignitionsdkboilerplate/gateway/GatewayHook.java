@@ -10,6 +10,8 @@ import com.inductiveautomation.ignition.gateway.web.systemjs.SystemJsModule;
 import com.jw.ignitionsdkboilerplate.common.ModuleConstants;
 import com.jw.ignitionsdkboilerplate.gateway.api.ApiRouteRegistrar;
 import com.jw.ignition.auth.api.AuthRouteRegistrar;
+import com.jw.ignitionsdkboilerplate.gateway.auth.AppPermission;
+import com.jw.ignitionsdkboilerplate.gateway.license.LicenseManagementRouteRegistrar;
 import com.jw.ignitionsdkboilerplate.gateway.perspective.PerspectiveBundle;
 import com.jw.ignitionsdkboilerplate.gateway.service.ServiceBundle;
 import org.slf4j.Logger;
@@ -60,7 +62,16 @@ public class GatewayHook extends AbstractGatewayModuleHook {
     @Override
     public void mountRouteHandlers(RouteGroup routes) {
         new AuthRouteRegistrar(context, services.auth(), ModuleConstants.API_PREFIX).register(routes);
-        new ApiRouteRegistrar(context, services.auth(), moduleVersion()).register(routes);
+        new LicenseManagementRouteRegistrar(
+                context,
+                services.auth(),
+                services.license(),
+                ModuleConstants.API_PREFIX,
+                ModuleConstants.MODULE_NAME,
+                ModuleConstants.MOUNT_ALIAS,
+                AppPermission.LICENSE_MANAGE
+        ).register(routes);
+        new ApiRouteRegistrar(context, services.auth(), services.license(), moduleVersion()).register(routes);
     }
 
     @Override
@@ -112,6 +123,14 @@ public class GatewayHook extends AbstractGatewayModuleHook {
                     .mount(
                         "%s/counter".formatted(ModuleConstants.MOUNT_ALIAS),
                         ModuleConstants.WebPackages.COUNTER_PAGE_EXPORT_NAME,
+                        pageJsModule
+                    )
+                )
+                .addPage("License", page -> page
+                    .position(30)
+                    .mount(
+                        "%s/license".formatted(ModuleConstants.MOUNT_ALIAS),
+                        ModuleConstants.WebPackages.LICENSE_PAGE_EXPORT_NAME,
                         pageJsModule
                     )
                 )

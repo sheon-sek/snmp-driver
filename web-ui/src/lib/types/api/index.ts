@@ -30,3 +30,4 @@ export interface PaginationParams {
 
 export * from "./health";
 export * from "./auth";
+export * from "./license";

@@ -11,20 +11,30 @@ import { DynamicRouter } from "./components/foundation/DynamicRouter";
 import { AppLayout } from "./components/layout/AppLayout";
 import { hasAllPermissions, useCurrentUser } from "./query/auth";
 import type { CurrentUserResponse } from "@/lib/types/api/auth";
+import type { LicenseAccessSnapshot } from "@/lib/types/api/license";
+import {
+  meetsLicenseRequirement,
+  useLicenseAccess,
+} from "./query/license";
 import { useHealth } from "./query/health";
 import { useTranslation } from "react-i18next";
 
 import LoginRequiredPage from "./pages/Auth/LoginRequiredPage";
 import SessionErrorPage from "./pages/Auth/SessionErrorPage";
 import UserDeniedPage from "./pages/Auth/UserDeniedPage";
+import LicenseRequiredPage from "./pages/Auth/LicenseRequiredPage";
 
 export default function App() {
   const { data: user } = useCurrentUser();
+  const { data: license } = useLicenseAccess({
+    skip: import.meta.env.DEV || !user?.appAuthenticated,
+  });
   const { data: health } = useHealth({autoRefresh: false});
   const { t } = useTranslation();
   const visibleNavigationGroups = filterNavigationGroups(
     navigationGroups,
     user,
+    license,
   );
 
   return (
@@ -46,9 +56,11 @@ export default function App() {
             element={
               <RouteGuard 
                 requiredPermissions={route.requiredPermissions}
+                requiredLicense={route.requiredLicense}
                 LoginRequiredPage={LoginRequiredPage}
                 SessionErrorPage={SessionErrorPage}
                 UserDeniedPage={UserDeniedPage}
+                LicenseRequiredPage={LicenseRequiredPage}
               >
                 {route.element}
               </RouteGuard>
@@ -63,12 +75,18 @@ export default function App() {
 function filterNavigationGroups(
   groups: NavigationGroup[],
   user: CurrentUserResponse | undefined,
+  license: LicenseAccessSnapshot | undefined,
 ) {
   return groups
-    .filter((group) => import.meta.env.DEV || hasAllPermissions(user, group.requiredPermissions))
+    .filter(
+      (group) =>
+        import.meta.env.DEV ||
+        (hasAllPermissions(user, group.requiredPermissions) &&
+          meetsLicenseRequirement(license, group.requiredLicense)),
+    )
     .map((group) => ({
       ...group,
-      items: filterNavigationItems(group.items, user),
+      items: filterNavigationItems(group.items, user, license),
     }))
     .filter((group) => group.items.length > 0);
 }
@@ -76,13 +94,19 @@ function filterNavigationGroups(
 function filterNavigationItems(
   items: NavigationItem[],
   user: CurrentUserResponse | undefined,
+  license: LicenseAccessSnapshot | undefined,
 ): NavigationItem[] {
   return items
-    .filter((item) => import.meta.env.DEV || hasAllPermissions(user, item.requiredPermissions))
+    .filter(
+      (item) =>
+        import.meta.env.DEV ||
+        (hasAllPermissions(user, item.requiredPermissions) &&
+          meetsLicenseRequirement(license, item.requiredLicense)),
+    )
     .map((item) => ({
       ...item,
       children: item.children
-        ? filterNavigationItems(item.children, user)
+        ? filterNavigationItems(item.children, user, license)
         : undefined,
     }))
     .filter((item) => item.href || (item.children && item.children.length > 0));

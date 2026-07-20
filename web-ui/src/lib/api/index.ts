@@ -36,6 +36,8 @@ export function createAuthBaseApi({
       "CurrentUser",
       "PermissionConfig",
       "SecurityLevelRoles",
+      "LicenseAccess",
+      "LicenseStatus",
       ...tagTypes,
     ],
   });

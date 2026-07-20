@@ -6,6 +6,7 @@ import type {
 } from '../types/appRoutes';
 import { BookOpen, Home, Settings } from "lucide-react";
 import { HomePage, PermissionControlPage } from "../pages";
+import type { RequiredLicense } from "@/lib/types";
 
 export function createNavigationGroups(
   routes: AppRouteDefinition[],
@@ -24,12 +25,20 @@ export function createNavigationGroups(
 export function flattenAppRoutes(
   routes: AppRouteDefinition[],
   parentPath = "",
+  inheritedLicense: RequiredLicense = true,
 ): FlatAppRouteDefinition[] {
   return routes.flatMap((route) => {
     const path = resolveRoutePath(parentPath, route.path);
     const { children: childRoutes, element, ...routeMeta } = route;
-    const current = element ? [{ ...routeMeta, path, element }] : [];
-    const children = flattenAppRoutes(childRoutes ?? [], path);
+    const requiredLicense = route.requiredLicense ?? inheritedLicense;
+    const current = element
+      ? [{ ...routeMeta, requiredLicense, path, element }]
+      : [];
+    const children = flattenAppRoutes(
+      childRoutes ?? [],
+      path,
+      requiredLicense,
+    );
 
     return [...current, ...children];
   });
@@ -38,11 +47,13 @@ export function flattenAppRoutes(
 function createNavigationItem(
   route: AppRouteDefinition,
   parentPath = "",
+  inheritedLicense: RequiredLicense = true,
 ): NavigationItem {
   const routePath = resolveRoutePath(parentPath, route.path);
+  const requiredLicense = route.requiredLicense ?? inheritedLicense;
   const children = (route.children ?? [])
     .filter((child) => child.showInNav !== false)
-    .map((child) => createNavigationItem(child, routePath));
+    .map((child) => createNavigationItem(child, routePath, requiredLicense));
 
   return {
     id: route.id,
@@ -53,6 +64,7 @@ function createNavigationItem(
     breadcrumbLabel: route.breadcrumbLabel,
     breadcrumbLabelKey: route.breadcrumbLabelKey,
     requiredPermissions: route.requiredPermissions,
+    requiredLicense,
     ...(children.length > 0 ? { children } : {}),
   };
 }
@@ -96,6 +108,7 @@ export const appRoutes: AppRouteDefinition[] = [
     breadcrumbLabel: "Home",
     breadcrumbLabelKey: "general.layout.navigation.routes.home.breadcrumb",
     icon: Home,
+    requiredLicense: { match: "all", "features": ["core"] },
   },
   {
     id: "dummy",
@@ -107,6 +120,7 @@ export const appRoutes: AppRouteDefinition[] = [
     breadcrumbLabel: "Dummy",
     breadcrumbLabelKey: "general.layout.navigation.routes.dummy.breadcrumb",
     icon: BookOpen,
+    requiredLicense: { match: "all", "features": ["core"] },
     children: [
       {
         id: "dummy-subpage1",
@@ -133,6 +147,7 @@ export const appRoutes: AppRouteDefinition[] = [
                 labelKey: "general.layout.navigation.routes.dummySubpage1-1-1.label",
                 breadcrumbLabel: "Subpage 1-1-1",
                 breadcrumbLabelKey: "general.layout.navigation.routes.dummySubpage1-1-1.breadcrumb",
+                requiredLicense: { match: "all", "features": ["core", "sub"] },
               },
             ]
           },
@@ -169,6 +184,7 @@ export const appRoutes: AppRouteDefinition[] = [
     breadcrumbLabel: "Settings",
     breadcrumbLabelKey: "general.layout.navigation.routes.settings.breadcrumb",
     icon: Settings,
+    requiredLicense: true,
     children: [
       {
         id: "settings-permissions",

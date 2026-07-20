@@ -1,5 +1,6 @@
 import { ReactNode } from "react";
 import { LucideIcon } from "lucide-react";
+import type { RequiredLicense } from "@/lib/types";
 
 export interface AppRouteDefinition {
   id: string;
@@ -13,6 +14,7 @@ export interface AppRouteDefinition {
   navGroupId?: string;
   showInNav?: boolean;
   requiredPermissions?: string[];
+  requiredLicense?: RequiredLicense;
   children?: AppRouteDefinition[];
 }
 
@@ -26,6 +28,7 @@ export interface NavigationItem {
   breadcrumbLabel?: string;
   breadcrumbLabelKey?: string;
   requiredPermissions?: string[];
+  requiredLicense?: RequiredLicense;
 }
 
 export interface NavigationGroup {
@@ -35,6 +38,7 @@ export interface NavigationGroup {
   icon?: LucideIcon;
   items: NavigationItem[];
   requiredPermissions?: string[];
+  requiredLicense?: RequiredLicense;
 }
 
 export interface FlatAppRouteDefinition extends Omit<

@@ -20,6 +20,7 @@ public final class ModuleConstants {
 
         public static final String WEBAPP_EXPORT_NAME = "IgnitionSdkBoilerplateWebApp";
         public static final String COUNTER_PAGE_EXPORT_NAME = "IgnitionSdkBoilerplateCounterPage";
+        public static final String LICENSE_PAGE_EXPORT_NAME = "IgnitionSdkBoilerplateLicensePage";
 
         private WebPackages() {
         }
