@@ -64,6 +64,5 @@ include(
         ":base",
         ":common",
         ":gateway",
-        ":designer",
         ":web-ui"
 )

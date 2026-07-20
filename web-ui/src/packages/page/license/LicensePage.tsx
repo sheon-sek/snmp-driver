@@ -10,7 +10,7 @@ interface PageMessage {
   type: "info" | "warning" | "error";
 }
 
-const MODULE_NAME = "Ignition SDK Boilerplate";
+const MODULE_NAME = "SNMP Driver";
 
 export interface LicensePageProps {
   apiBase?: string;

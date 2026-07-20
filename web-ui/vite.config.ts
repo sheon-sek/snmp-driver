@@ -26,7 +26,7 @@ export default defineConfig(({ command, mode }) => {
   const requestedTarget =
     command === "build"
       ? (process.env.APP_BUILD_TARGET ?? requiredEnv(env, "APP_BUILD_TARGET"))
-      : "webapp";
+      : "page";
 
   if (!isModuleTarget(requestedTarget)) {
     throw new Error(

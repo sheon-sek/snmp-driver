@@ -4,94 +4,46 @@ import com.inductiveautomation.ignition.gateway.dataroutes.AccessControlStrategy
 import com.inductiveautomation.ignition.gateway.dataroutes.HttpMethod;
 import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
 import com.inductiveautomation.ignition.gateway.dataroutes.RouteHandler;
-import com.inductiveautomation.ignition.gateway.model.GatewayContext;
-import com.jw.ignition.auth.api.AuthFilter;
-import com.jw.ignition.auth.core.AuthCore;
 import com.jw.ignition.common.license.LicenseRequirement;
 import com.jw.ignition.common.license.ModuleLicenseRuntime;
 import com.jw.ignition.common.util.Json;
 
 public abstract class AbstractApiRouteRegistrar {
-    private final ApiErrorHandler errorHandler;
-    private final AuthFilter authFilter;
+    private final ApiErrorHandler errorHandler = new ApiErrorHandler();
     private final LicenseRequirement defaultLicenseRequirement;
     private final ModuleLicenseRuntime license;
-    protected final AuthCore auth;
     private final String routePrefix;
 
-    protected AbstractApiRouteRegistrar(GatewayContext context, AuthCore auth, String routePrefix) {
-        this(context, auth, routePrefix, null, null);
+    protected AbstractApiRouteRegistrar(String routePrefix) {
+        this(routePrefix, null, null);
     }
 
     protected AbstractApiRouteRegistrar(
-            GatewayContext context,
-            AuthCore auth,
             String routePrefix,
             ModuleLicenseRuntime license
     ) {
-        this(context, auth, routePrefix, license, LicenseRequirement.licensed());
+        this(routePrefix, license, LicenseRequirement.licensed());
     }
 
     protected AbstractApiRouteRegistrar(
-            GatewayContext context,
-            AuthCore auth,
             String routePrefix,
             ModuleLicenseRuntime license,
             LicenseRequirement defaultLicenseRequirement
     ) {
-        this.auth = auth;
         this.routePrefix = routePrefix;
         this.license = license;
         this.defaultLicenseRequirement = defaultLicenseRequirement;
-
-        authFilter = new AuthFilter(context, auth);
-        errorHandler = new ApiErrorHandler();
     }
 
     public abstract void register(RouteGroup routes);
 
     protected void json(
-        RouteGroup routes,
-        HttpMethod method,
-        String path,
-        boolean requireAuthenticated,
-        String permissionKey,
-        RouteHandler handler
-    ) {
-        json(
-                routes,
-                AccessControlStrategy.OPEN_ROUTE,
-                method,
-                path,
-                requireAuthenticated,
-                permissionKey,
-                handler
-        );
-    }
-
-    protected void json(RouteGroup routes, HttpMethod method, String path, RouteHandler handler) {
-        json(routes, method, path, false, "", handler);
-    }
-
-    protected void json(
             RouteGroup routes,
             HttpMethod method,
             String path,
-            boolean requireAuthenticated,
-            String permissionKey,
-            LicenseRequirement licenseRequirement,
             RouteHandler handler
     ) {
-        json(
-                routes,
-                AccessControlStrategy.OPEN_ROUTE,
-                method,
-                path,
-                requireAuthenticated,
-                permissionKey,
-                licenseRequirement,
-                handler
-        );
+        json(routes, AccessControlStrategy.OPEN_ROUTE, method, path, null, handler);
     }
 
     protected void json(
@@ -99,11 +51,9 @@ public abstract class AbstractApiRouteRegistrar {
             AccessControlStrategy accessControl,
             HttpMethod method,
             String path,
-            boolean requireAuthenticated,
-            String permissionKey,
             RouteHandler handler
     ) {
-        json(routes, accessControl, method, path, requireAuthenticated, permissionKey, null, handler);
+        json(routes, accessControl, method, path, null, handler);
     }
 
     protected void json(
@@ -111,8 +61,6 @@ public abstract class AbstractApiRouteRegistrar {
             AccessControlStrategy accessControl,
             HttpMethod method,
             String path,
-            boolean requireAuthenticated,
-            String permissionKey,
             LicenseRequirement licenseRequirement,
             RouteHandler handler
     ) {
@@ -122,56 +70,6 @@ public abstract class AbstractApiRouteRegistrar {
                 method,
                 path,
                 RouteGroup.TYPE_JSON,
-                requireAuthenticated,
-                permissionKey,
-                licenseRequirement,
-                handler
-        );
-    }
-
-    protected void json(RouteGroup routes, AccessControlStrategy accessControl, HttpMethod method, String path, RouteHandler handler) {
-        json(routes, accessControl, method, path, false, "", handler);
-    }
-
-    protected void binary(
-        RouteGroup routes,
-        HttpMethod method,
-        String path,
-        boolean requireAuthenticated,
-        String permissionKey,
-        RouteHandler handler
-    ) {
-        binary(
-                routes,
-                AccessControlStrategy.OPEN_ROUTE,
-                method,
-                path,
-                requireAuthenticated,
-                permissionKey,
-                handler
-        );
-    }
-
-    protected void binary(RouteGroup routes, HttpMethod method, String path, RouteHandler handler) {
-        binary(routes, method, path, false, "", handler);
-    }
-
-    protected void binary(
-            RouteGroup routes,
-            HttpMethod method,
-            String path,
-            boolean requireAuthenticated,
-            String permissionKey,
-            LicenseRequirement licenseRequirement,
-            RouteHandler handler
-    ) {
-        binary(
-                routes,
-                AccessControlStrategy.OPEN_ROUTE,
-                method,
-                path,
-                requireAuthenticated,
-                permissionKey,
                 licenseRequirement,
                 handler
         );
@@ -179,14 +77,11 @@ public abstract class AbstractApiRouteRegistrar {
 
     protected void binary(
             RouteGroup routes,
-            AccessControlStrategy accessControl,
             HttpMethod method,
             String path,
-            boolean requireAuthenticated,
-            String permissionKey,
             RouteHandler handler
     ) {
-        binary(routes, accessControl, method, path, requireAuthenticated, permissionKey, null, handler);
+        binary(routes, AccessControlStrategy.OPEN_ROUTE, method, path, null, handler);
     }
 
     protected void binary(
@@ -194,8 +89,16 @@ public abstract class AbstractApiRouteRegistrar {
             AccessControlStrategy accessControl,
             HttpMethod method,
             String path,
-            boolean requireAuthenticated,
-            String permissionKey,
+            RouteHandler handler
+    ) {
+        binary(routes, accessControl, method, path, null, handler);
+    }
+
+    protected void binary(
+            RouteGroup routes,
+            AccessControlStrategy accessControl,
+            HttpMethod method,
+            String path,
             LicenseRequirement licenseRequirement,
             RouteHandler handler
     ) {
@@ -205,46 +108,35 @@ public abstract class AbstractApiRouteRegistrar {
                 method,
                 path,
                 RouteGroup.TYPE_OCTET_STREAM,
-                requireAuthenticated,
-                permissionKey,
                 licenseRequirement,
                 handler
         );
     }
 
-    protected void binary(RouteGroup routes, AccessControlStrategy accessControl, HttpMethod method, String path, RouteHandler handler) {
-        binary(routes, accessControl, method, path, false, "", handler);
-    }
-
     protected void html(
             RouteGroup routes,
+            AccessControlStrategy accessControl,
             HttpMethod method,
             String path,
-            boolean requireAuthenticated,
-            String permissionKey,
             RouteHandler handler
     ) {
         mount(
                 routes,
-                AccessControlStrategy.OPEN_ROUTE,
+                accessControl,
                 method,
                 path,
                 RouteGroup.TYPE_TEXT_HTML,
-                requireAuthenticated,
-                permissionKey,
                 null,
                 handler
         );
     }
 
-    protected void mount(
+    private void mount(
             RouteGroup routes,
             AccessControlStrategy accessControl,
             HttpMethod method,
             String path,
             String type,
-            boolean requireAuthenticated,
-            String permissionKey,
             LicenseRequirement licenseRequirement,
             RouteHandler handler
     ) {
@@ -263,17 +155,11 @@ public abstract class AbstractApiRouteRegistrar {
             }
             guarded = license.wrap(effectiveLicenseRequirement, guarded);
         }
-        if (requireAuthenticated) {
-            guarded = permissionKey == null || permissionKey.isBlank()
-                    ? authFilter.authenticated(guarded)
-                    : authFilter.require(permissionKey, guarded);
-        }
-        mounter = mounter.handler(errorHandler.wrap(guarded));
 
+        mounter = mounter.handler(errorHandler.wrap(guarded));
         if (RouteGroup.TYPE_JSON.equals(type)) {
             mounter = mounter.renderer(Json.GSON::toJson);
         }
-
         mounter.mount();
     }
 }

@@ -6,7 +6,6 @@ import {
 } from "@/i18n";
 
 export type AppThemeMode = "system" | "dark" | "light";
-export type PerspectiveThemeMode = "Dark-Mode" | "Light-Mode";
 
 export interface UiPreferencesState {
   themeMode: AppThemeMode;
@@ -24,10 +23,6 @@ export const initialUiPreferencesState: UiPreferencesState = {
 
 const themeModes = new Set<AppThemeMode>(["system", "dark", "light"]);
 const languages = new Set<AppLanguage>(supportedLanguageCodes);
-const perspectiveThemeModes = new Map<PerspectiveThemeMode, AppThemeMode>([
-  ["Dark-Mode", "dark"],
-  ["Light-Mode", "light"],
-]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -53,11 +48,7 @@ export function toAppThemeMode(
   value: string | undefined,
   onInvalid?: InvalidPreferenceHandler,
 ): AppThemeMode {
-  // Fall back to default theme mode if the value is not a valid AppThemeMode or PerspectiveThemeMode
-  if (
-    !themeModes.has(value as AppThemeMode) &&
-    !perspectiveThemeModes.has(value as PerspectiveThemeMode)
-  ) {
+  if (!themeModes.has(value as AppThemeMode)) {
     onInvalid?.(
       `Unsupported theme mode: ${value}. Falling back to default theme mode '${initialUiPreferencesState.themeMode}'.`,
     );
@@ -65,10 +56,7 @@ export function toAppThemeMode(
     return initialUiPreferencesState.themeMode;
   }
 
-  return (
-    perspectiveThemeModes.get(value as PerspectiveThemeMode) ??
-    (value as AppThemeMode)
-  );
+  return value as AppThemeMode;
 }
 
 function readPersistedState(value: unknown): UiPreferencesState {

@@ -14,8 +14,6 @@ java {
 dependencies {
     compileOnly "com.inductiveautomation.ignitionsdk:ignition-common:${ignitionVersion}"
     compileOnly "com.inductiveautomation.ignitionsdk:gateway-api:${ignitionVersion}"
-    compileOnly "com.inductiveautomation.ignitionsdk:perspective-common:${ignitionVersion}"
-    compileOnly "com.inductiveautomation.ignitionsdk:perspective-gateway:${ignitionVersion}"
     compileOnly project(':base')
     compileOnly project(':common')
 

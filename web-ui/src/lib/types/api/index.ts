@@ -28,6 +28,4 @@ export interface PaginationParams {
   pageSize?: number;
 }
 
-export * from "./health";
-export * from "./auth";
 export * from "./license";

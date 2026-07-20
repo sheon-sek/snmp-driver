@@ -51,20 +51,13 @@ ignitionModule {
 
     projectScopes.putAll([
             ':base'    : 'G',
-            ':common'   : 'GCD',
+            ':common'   : 'G',
             ':gateway'  : 'G',
-            ':designer' : 'D',
             ':web-ui'   : 'G',
     ])
 
-    moduleDependencies.set([
-            'com.inductiveautomation.perspective': 'DG',
-    ])
-
     def gatewayHookClass = "${property('moduleId')}.gateway.GatewayHook".toString()
-    def designerHookClass = "${property('moduleId')}.designer.DesignerHook".toString()
     hooks.putAll([
         (gatewayHookClass) : 'G',
-        (designerHookClass) : 'D',
     ])
 }

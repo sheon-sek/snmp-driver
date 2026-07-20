@@ -1,14 +1,7 @@
 import { createContext, useContext } from "react";
 
-export type EmbedMode = "standalone" | "perspective";
-export interface PerspectiveSessionContext {
-  sessionId?: string;
-  projectName?: string;
-}
 export interface ApiRuntimeContext {
   apiBase: string;
-  embedMode: EmbedMode;
-  perspectiveSession?: PerspectiveSessionContext;
 }
 
 const ApiRuntimeReactContext = createContext<ApiRuntimeContext | null>(null);

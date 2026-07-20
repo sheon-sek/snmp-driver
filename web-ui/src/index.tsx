@@ -1,12 +1,12 @@
 import { createRoot } from "react-dom/client";
 
-import WebApp from "@/packages/webapp/WebApp";
+import LicensePage from "@/packages/page/license";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
   throw new Error("Missing #root element");
 }
 
-createRoot(rootElement).render(<WebApp />);
+createRoot(rootElement).render(<LicensePage />);
 
-export default WebApp;
+export default LicensePage;

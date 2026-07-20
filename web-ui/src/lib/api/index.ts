@@ -26,38 +26,13 @@ export function createBaseApi({
   });
 }
 
-export function createAuthBaseApi({
-  reducerPath = "api",
-  tagTypes = [],
-}: CreateBaseApiOptions = {}) {
-  return createBaseApi({
-    reducerPath,
-    tagTypes: [
-      "CurrentUser",
-      "PermissionConfig",
-      "SecurityLevelRoles",
-      "LicenseAccess",
-      "LicenseStatus",
-      ...tagTypes,
-    ],
-  });
-}
-
 export type BaseApi = ReturnType<typeof createBaseApi>;
 
 const rawBaseQuery = fetchBaseQuery({
   credentials: "include",
   prepareHeaders: async (headers, { arg, extra }) => {
     const runtime = runtimeContext(extra);
-    const session = runtime.perspectiveSession;
-    if (session?.sessionId) {
-      headers.set("X-EEAUTH-Session-Id", session.sessionId);
-    }
-    if (session?.projectName) {
-      headers.set("X-EEAUTH-Project", session.projectName);
-    }
-
-    if (runtime.embedMode === "standalone" && isUnsafeRequest(arg)) {
+    if (isUnsafeRequest(arg)) {
       headers.set("x-csrf-token", await fetchCsrfToken(runtime.apiBase));
     }
 
@@ -111,7 +86,7 @@ function runtimeContext(value: unknown): ApiRuntimeContext {
   ) {
     return value as ApiRuntimeContext;
   }
-  return { apiBase: "", embedMode: "standalone" };
+  return { apiBase: "" };
 }
 
 function joinUrl(baseUrl: string, path: string) {
