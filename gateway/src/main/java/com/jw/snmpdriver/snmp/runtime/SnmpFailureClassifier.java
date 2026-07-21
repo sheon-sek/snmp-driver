@@ -35,11 +35,11 @@ public final class SnmpFailureClassifier {
                     true
             );
         }
-        if (root instanceof SnmpLicenseException) {
+        if (root instanceof SnmpLicenseException licenseError) {
             return failure(
                     "license",
                     root,
-                    StatusCodes.Bad_UserAccessDenied,
+                    licenseError.statusCode(),
                     false,
                     false,
                     false
