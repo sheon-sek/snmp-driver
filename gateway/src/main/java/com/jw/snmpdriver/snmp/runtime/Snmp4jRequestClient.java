@@ -59,39 +59,124 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
     private final Snmp snmp;
     private final SecurityProtocols securityProtocols;
     private final AtomicBoolean started = new AtomicBoolean();
+    private volatile boolean ipv6Available;
+    private boolean closed;
 
     public Snmp4jRequestClient(DnsResolver dnsResolver) throws IOException {
-        this.dnsResolver = dnsResolver;
-        this.ipv4Transport = new DefaultUdpTransportMapping();
-        this.ipv6Transport = new DefaultUdpTransportMapping(
-                new UdpAddress(InetAddress.getByName("::"), 0),
-                true
-        );
-        this.snmp = new Snmp(ipv4Transport);
-        this.snmp.addTransportMapping(ipv6Transport);
-        this.securityProtocols = SecurityProtocols.getInstance().addDefaultProtocols();
-        securityProtocols.addAuthenticationProtocol(new AuthMD5());
-        securityProtocols.addAuthenticationProtocol(new AuthSHA());
-        securityProtocols.addAuthenticationProtocol(new AuthHMAC128SHA224());
-        securityProtocols.addAuthenticationProtocol(new AuthHMAC192SHA256());
-        securityProtocols.addAuthenticationProtocol(new AuthHMAC256SHA384());
-        securityProtocols.addAuthenticationProtocol(new AuthHMAC384SHA512());
-        securityProtocols.addPrivacyProtocol(new PrivDES());
-        securityProtocols.addPrivacyProtocol(new PrivAES128());
-        securityProtocols.addPrivacyProtocol(new PrivAES192());
-        securityProtocols.addPrivacyProtocol(new PrivAES256());
+        this(dnsResolver, new TransportFactory() {});
+    }
 
-        byte[] localEngineId = MPv3.createLocalEngineID();
-        USM usm = new USM(securityProtocols, new OctetString(localEngineId), 0);
-        SecurityModels.getInstance().addSecurityModel(usm);
-        snmp.setLocalEngine(localEngineId, 0, 0);
+    Snmp4jRequestClient(DnsResolver dnsResolver, TransportFactory factory) throws IOException {
+        this.dnsResolver = dnsResolver;
+        DefaultUdpTransportMapping ipv4 = null;
+        DefaultUdpTransportMapping ipv6 = null;
+        Snmp client = null;
+        try {
+            this.ipv4Transport = ipv4 = factory.createIpv4();
+            try {
+                ipv6 = factory.createIpv6();
+            } catch (IOException | UnsupportedOperationException | SecurityException error) {
+                logger.warn("SNMP IPv6 transport unavailable; IPv4 remains enabled", error);
+            }
+            this.ipv6Transport = ipv6;
+            this.ipv6Available = ipv6 != null;
+            this.snmp = client = factory.createSnmp(ipv4Transport);
+            if (ipv6Transport != null) {
+                this.snmp.addTransportMapping(ipv6Transport);
+            }
+            this.securityProtocols = SecurityProtocols.getInstance().addDefaultProtocols();
+            securityProtocols.addAuthenticationProtocol(new AuthMD5());
+            securityProtocols.addAuthenticationProtocol(new AuthSHA());
+            securityProtocols.addAuthenticationProtocol(new AuthHMAC128SHA224());
+            securityProtocols.addAuthenticationProtocol(new AuthHMAC192SHA256());
+            securityProtocols.addAuthenticationProtocol(new AuthHMAC256SHA384());
+            securityProtocols.addAuthenticationProtocol(new AuthHMAC384SHA512());
+            securityProtocols.addPrivacyProtocol(new PrivDES());
+            securityProtocols.addPrivacyProtocol(new PrivAES128());
+            securityProtocols.addPrivacyProtocol(new PrivAES192());
+            securityProtocols.addPrivacyProtocol(new PrivAES256());
+
+            byte[] localEngineId = MPv3.createLocalEngineID();
+            USM usm = new USM(securityProtocols, new OctetString(localEngineId), 0);
+            SecurityModels.getInstance().addSecurityModel(usm);
+            snmp.setLocalEngine(localEngineId, 0, 0);
+        } catch (IOException | RuntimeException | Error error) {
+            closeResources(client, ipv4, ipv6, error);
+            throw error;
+        }
+    }
+
+    private static void closeResources(
+            Snmp client,
+            DefaultUdpTransportMapping ipv4,
+            DefaultUdpTransportMapping ipv6,
+            Throwable failure
+    ) {
+        // Snmp.close stops at the first mapping exception, before releasing its timer and dispatcher.
+        // Detach mappings so each socket and the session receive an independent cleanup attempt.
+        if (client != null) {
+            if (ipv4 != null) {
+                closeAfterFailure(() -> client.removeTransportMapping(ipv4), failure);
+            }
+            if (ipv6 != null) {
+                closeAfterFailure(() -> client.removeTransportMapping(ipv6), failure);
+            }
+        }
+        closeAfterFailure(ipv4, failure);
+        closeAfterFailure(ipv6, failure);
+        closeAfterFailure(client, failure);
+    }
+
+    private static void closeAfterFailure(AutoCloseable resource, Throwable failure) {
+        if (resource != null) {
+            try {
+                resource.close();
+            } catch (Exception cleanupError) {
+                failure.addSuppressed(cleanupError);
+            }
+        }
+    }
+
+    interface TransportFactory {
+        default DefaultUdpTransportMapping createIpv4() throws IOException {
+            return new DefaultUdpTransportMapping();
+        }
+
+        default DefaultUdpTransportMapping createIpv6() throws IOException {
+            return new DefaultUdpTransportMapping(new UdpAddress(InetAddress.getByName("::"), 0));
+        }
+
+        default Snmp createSnmp(DefaultUdpTransportMapping ipv4) throws IOException {
+            return new Snmp(ipv4);
+        }
     }
 
     @Override
-    public void start() throws IOException {
-        if (started.compareAndSet(false, true)) {
-            snmp.listen();
-            logger.info("Shared SNMP UDP transport started");
+    public synchronized void start() throws IOException {
+        if (closed) {
+            throw new IllegalStateException("SNMP transport is closed");
+        }
+        if (!started.get()) {
+            try {
+                ipv4Transport.listen();
+                if (ipv6Available) {
+                    try {
+                        ipv6Transport.listen();
+                    } catch (IOException | UnsupportedOperationException | SecurityException error) {
+                        ipv6Available = false;
+                        snmp.removeTransportMapping(ipv6Transport);
+                        closeAfterFailure(ipv6Transport, error);
+                        logger.warn("SNMP IPv6 listener unavailable; IPv4 remains enabled", error);
+                    }
+                }
+                snmp.listen();
+                started.set(true);
+                logger.info("Shared SNMP UDP transport started");
+            } catch (IOException | RuntimeException | Error error) {
+                closed = true;
+                closeResources(snmp, ipv4Transport, ipv6Transport, error);
+                throw error;
+            }
         }
     }
 
@@ -106,7 +191,7 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
         if (oids == null || oids.isEmpty()) {
             return CompletableFuture.failedFuture(new IllegalArgumentException("SNMP GET batch cannot be empty"));
         }
-        return dnsResolver.resolve(endpoint)
+        return dnsResolver.resolve(endpoint, ipv6Available)
                 .thenCompose(address -> sendGet(endpoint, List.copyOf(oids), address));
     }
 
@@ -119,7 +204,7 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
         if (!started.get()) {
             return CompletableFuture.failedFuture(new IllegalStateException("SNMP transport is not started"));
         }
-        return dnsResolver.resolve(endpoint)
+        return dnsResolver.resolve(endpoint, ipv6Available)
                 .thenCompose(address -> sendSet(endpoint, oid, value, address));
     }
 
@@ -649,12 +734,15 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         started.set(false);
-        try {
-            snmp.close();
-        } catch (IOException error) {
-            logger.warn("Failed to close shared SNMP transport", error);
+        if (!closed) {
+            closed = true;
+            IOException failure = new IOException("Failed to close shared SNMP transport");
+            closeResources(snmp, ipv4Transport, ipv6Transport, failure);
+            if (failure.getSuppressed().length != 0) {
+                logger.warn(failure.getMessage(), failure);
+            }
         }
     }
 }
