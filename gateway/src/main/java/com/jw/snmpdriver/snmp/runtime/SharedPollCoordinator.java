@@ -335,17 +335,20 @@ public final class SharedPollCoordinator {
                     if (set != null) {
                         preferSet = false;
                         inFlight++;
-                        dispatchSet(set);
+                        dispatchSet(set, probe);
                     } else {
                         if (batch.isEmpty() && probe) {
                             batch = selectProbeBatch();
                         }
                         if (batch.isEmpty()) {
+                            if (probe) {
+                                breaker.abortProbe(nanoClock.getAsLong());
+                            }
                             break;
                         }
                         preferSet = true;
                         inFlight++;
-                        dispatchBatch(batch);
+                        dispatchBatch(batch, probe);
                     }
 
                     if (probe) {
@@ -357,20 +360,20 @@ public final class SharedPollCoordinator {
             }
         }
 
-        private void dispatchSet(SetCommand command) {
+        private void dispatchSet(SetCommand command, boolean probe) {
             try {
                 CompletionStage<SetResult> request =
                         requestClient.set(endpoint, command.address.oid(), command.value);
                 if (request == null) {
                     throw new IllegalStateException("SNMP request client returned a null SET stage");
                 }
-                request.whenComplete((result, error) -> completeSet(command, result, error));
+                request.whenComplete((result, error) -> completeSet(command, result, error, probe));
             } catch (RuntimeException error) {
-                completeSet(command, null, error);
+                completeSet(command, null, error, probe);
             }
         }
 
-        private void completeSet(SetCommand command, SetResult result, Throwable error) {
+        private void completeSet(SetCommand command, SetResult result, Throwable error, boolean probe) {
             synchronized (this) {
                 inFlight = Math.max(0, inFlight - 1);
                 if (!isCurrent(this)) {
@@ -397,6 +400,8 @@ public final class SharedPollCoordinator {
                         recordCircuitFailure("SET", command.address.oid(), failure);
                     } else if (classified.legalResponse()) {
                         recordValidResponse("SET", command.address.oid());
+                    } else if (probe) {
+                        breaker.abortProbe(nanoClock.getAsLong());
                     }
                     recordFailure("SET", command.address.oid(), failure);
                     command.result.completeExceptionally(failure);
@@ -409,7 +414,7 @@ public final class SharedPollCoordinator {
             }
         }
 
-        private void dispatchBatch(List<PollEntry> batch) {
+        private void dispatchBatch(List<PollEntry> batch, boolean probe) {
             executeBatch(batch).whenComplete((ignored, error) -> {
                 synchronized (this) {
                     inFlight = Math.max(0, inFlight - 1);
@@ -424,6 +429,8 @@ public final class SharedPollCoordinator {
                             recordCircuitFailure("GET", null, failure);
                         } else if (classified.legalResponse()) {
                             recordValidResponse("GET", null);
+                        } else if (probe) {
+                            breaker.abortProbe(nanoClock.getAsLong());
                         }
                         recordFailure("GET_BATCH", null, failure);
                         for (PollEntry entry : batch) {
@@ -840,6 +847,12 @@ public final class SharedPollCoordinator {
                 return;
             }
             DeviceCircuitBreaker.State circuitState = breaker.state();
+            if (circuitState == DeviceCircuitBreaker.State.HALF_OPEN && inFlight == 0) {
+                logger.warn("SNMP circuit probe has no in-flight work device={} generation={}",
+                        endpoint.deviceId(), generation);
+                breaker.abortProbe(nowNanos);
+                circuitState = breaker.state();
+            }
             if (circuitState == DeviceCircuitBreaker.State.OPEN) {
                 if (setQueue.isEmpty() && entries.isEmpty()) {
                     return;

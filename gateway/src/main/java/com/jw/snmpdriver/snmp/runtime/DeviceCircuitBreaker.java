@@ -30,6 +30,14 @@ public final class DeviceCircuitBreaker {
         backoffIndex = 0;
     }
 
+    /** Retry a probe that did not establish a network outcome without escalating backoff. */
+    public synchronized void abortProbe(long nowNanos) {
+        if (state == State.HALF_OPEN) {
+            state = State.OPEN;
+            nextProbeNanos = nowNanos + TimeUnit.MILLISECONDS.toNanos(BACKOFF_MS[0]);
+        }
+    }
+
     public synchronized void onTransportFailure(long nowNanos, long jitterMillis) {
         consecutiveTransportFailures++;
         if (state == State.HALF_OPEN || consecutiveTransportFailures >= 2) {
