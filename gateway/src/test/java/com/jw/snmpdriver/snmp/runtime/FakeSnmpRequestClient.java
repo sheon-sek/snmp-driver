@@ -13,6 +13,7 @@ final class FakeSnmpRequestClient implements SnmpRequestClient {
     final List<GetRequest> gets = new ArrayList<>();
     final List<SetRequest> sets = new ArrayList<>();
     RuntimeException nextGetFailure;
+    RuntimeException nextSetFailure;
 
     @Override
     public CompletionStage<BatchResult> getBatch(SnmpEndpoint endpoint, List<NumericOid> oids) {
@@ -30,6 +31,11 @@ final class FakeSnmpRequestClient implements SnmpRequestClient {
     public CompletionStage<SetResult> set(SnmpEndpoint endpoint, NumericOid oid, Variable value) {
         SetRequest request = new SetRequest(endpoint, oid, value, new CompletableFuture<>());
         sets.add(request);
+        if (nextSetFailure != null) {
+            RuntimeException error = nextSetFailure;
+            nextSetFailure = null;
+            throw error;
+        }
         return request.result();
     }
 
