@@ -252,6 +252,35 @@ class SharedPollCoordinatorTest {
         assertTrue(client.gets.isEmpty());
     }
 
+    @Test
+    void cachedRedeliveryKeepsBindingInstant() {
+        SnmpEndpoint endpoint = endpoint("192.0.2.1");
+        DevicePollHandle handle = coordinator.registerDevice(endpoint);
+        handle.subscribe(address(OID), 1_000, values::add, failures::add);
+        scheduler.runReady();
+        assertEquals(1, client.gets.size());
+
+        Instant receivedAt = Instant.parse("2020-06-15T12:00:00Z");
+        RawBinding first = binding(OID, 42, receivedAt);
+        client.gets.get(0).result().complete(success(first));
+        assertEquals(List.of(first), values);
+
+        // The interval boundary republishes the cached binding before its
+        // replacement response exists, so the receive instant must not move.
+        scheduler.advanceBy(1, TimeUnit.SECONDS);
+        assertEquals(2, client.gets.size());
+        assertEquals(2, values.size());
+        assertEquals(receivedAt, values.get(1).receivedAt(),
+                "Cached redelivery must keep the original receive instant");
+        assertTrue(failures.isEmpty());
+    }
+
+    private static RawBinding binding(NumericOid oid, int value, Instant receivedAt) {
+        Integer32 variable = new Integer32(value);
+        return new RawBinding(oid, variable.getSyntax(), variable, receivedAt);
+    }
+
+
     private static SnmpEndpoint endpoint(String host) {
         return new SnmpEndpoint("device-1", host, 161, SNMPDeviceConfig.IpFamily.IPV4,
                 SNMPDeviceConfig.Version.V2C, "", "", "",
@@ -266,8 +295,7 @@ class SharedPollCoordinatorTest {
     }
 
     private static RawBinding binding(NumericOid oid, int value) {
-        Integer32 variable = new Integer32(value);
-        return new RawBinding(oid, variable.getSyntax(), variable, Instant.parse("2026-10-19T00:00:00Z"));
+        return binding(oid, value, Instant.parse("2026-10-19T00:00:00Z"));
     }
 
     private static BatchResult success(RawBinding... bindings) {

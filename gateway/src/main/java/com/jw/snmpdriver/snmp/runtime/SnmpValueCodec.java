@@ -15,6 +15,8 @@ import com.jw.snmpdriver.snmp.address.SnmpWireType;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ByteString;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
+import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
+import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.ULong;
@@ -39,7 +41,11 @@ public final class SnmpValueCodec {
 
     public DataValue toDataValue(ResolvedAddress address, RawBinding binding) {
         try {
-            return new DataValue(new Variant(decode(address, binding)));
+            return new DataValue(
+                    new Variant(decode(address, binding)),
+                    StatusCode.GOOD,
+                    new DateTime(binding.receivedAt()),
+                    DateTime.now());
         } catch (SnmpValueException error) {
             throw error;
         } catch (RuntimeException error) {
