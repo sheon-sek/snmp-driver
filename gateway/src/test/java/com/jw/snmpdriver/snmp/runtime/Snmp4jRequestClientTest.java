@@ -16,6 +16,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.snmp4j.CommandResponder;
 import org.snmp4j.CommandResponderEvent;
+import org.snmp4j.MessageDispatcherImpl;
 import org.snmp4j.PDU;
 import org.snmp4j.Snmp;
 import org.snmp4j.mp.StatusInformation;
@@ -109,7 +110,7 @@ class Snmp4jRequestClientTest {
                 public DefaultUdpTransportMapping createIpv6() { return ipv6; }
                 @Override
                 public Snmp createSnmp(DefaultUdpTransportMapping transport) {
-                    return new Snmp(transport) {
+                    return new Snmp(new MessageDispatcherImpl(), transport) {
                         @Override
                         public void listen() throws IOException {
                             super.listen();
@@ -151,7 +152,7 @@ class Snmp4jRequestClientTest {
         }; var ipv6 = new TrackingTransport(); DnsResolver resolver = new DnsResolver()) {
             IllegalStateException failure = new IllegalStateException("Registration failed");
             boolean[] clientClosed = {false};
-            Snmp session = new Snmp(ipv4) {
+            Snmp session = new Snmp(new MessageDispatcherImpl(), ipv4) {
                 @Override
                 public void setLocalEngine(byte[] engineId, int boots, int time) {
                     throw failure;
