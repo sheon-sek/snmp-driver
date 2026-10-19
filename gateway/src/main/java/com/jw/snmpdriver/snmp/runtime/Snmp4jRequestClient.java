@@ -16,12 +16,16 @@ import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.snmp4j.AbstractTarget;
 import org.snmp4j.CommunityTarget;
 import org.snmp4j.DirectUserTarget;
+import org.snmp4j.MessageDispatcherImpl;
 import org.snmp4j.PDU;
 import org.snmp4j.ScopedPDU;
 import org.snmp4j.Snmp;
 import org.snmp4j.UserTarget;
 import org.snmp4j.event.ResponseEvent;
 import org.snmp4j.event.ResponseListener;
+import org.snmp4j.mp.CounterSupport;
+import org.snmp4j.mp.MPv1;
+import org.snmp4j.mp.MPv2c;
 import org.snmp4j.mp.MPv3;
 import org.snmp4j.mp.SnmpConstants;
 import org.snmp4j.security.AuthHMAC128SHA224;
@@ -84,7 +88,8 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
             if (ipv6Transport != null) {
                 this.snmp.addTransportMapping(ipv6Transport);
             }
-            this.securityProtocols = SecurityProtocols.getInstance().addDefaultProtocols();
+            this.securityProtocols = new SecurityProtocols(SecurityProtocols.SecurityProtocolSet.none)
+                    .addDefaultProtocols();
             securityProtocols.addAuthenticationProtocol(new AuthMD5());
             securityProtocols.addAuthenticationProtocol(new AuthSHA());
             securityProtocols.addAuthenticationProtocol(new AuthHMAC128SHA224());
@@ -98,7 +103,12 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
 
             byte[] localEngineId = MPv3.createLocalEngineID();
             USM usm = new USM(securityProtocols, new OctetString(localEngineId), 0);
-            SecurityModels.getInstance().addSecurityModel(usm);
+            SecurityModels securityModels = new SecurityModels().addSecurityModel(usm);
+            var dispatcher = snmp.getMessageDispatcher();
+            dispatcher.addMessageProcessingModel(new MPv1());
+            dispatcher.addMessageProcessingModel(new MPv2c());
+            dispatcher.addMessageProcessingModel(new MPv3(
+                    localEngineId, null, securityProtocols, securityModels, CounterSupport.getInstance()));
             snmp.setLocalEngine(localEngineId, 0, 0);
         } catch (IOException | RuntimeException | Error error) {
             closeResources(client, ipv4, ipv6, error);
@@ -147,7 +157,9 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
         }
 
         default Snmp createSnmp(DefaultUdpTransportMapping ipv4) throws IOException {
-            return new Snmp(ipv4);
+            // The convenience constructor installs global security protocols and an MPv3 using global models.
+            // Return an unconfigured dispatcher so the client can install its own models before listening.
+            return new Snmp(new MessageDispatcherImpl(), ipv4);
         }
     }
 
