@@ -7,6 +7,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
@@ -14,6 +15,7 @@ import com.inductiveautomation.ignition.gateway.opcua.server.api.Device;
 import com.jw.ignition.common.license.ModuleLicenseRuntime;
 import com.jw.ignition.common.service.AbstractBundle;
 import com.jw.snmpdriver.common.ModuleConstants;
+import com.jw.snmpdriver.snmp.runtime.CallbackExecutor;
 import com.jw.snmpdriver.snmp.runtime.DnsResolver;
 import com.jw.snmpdriver.snmp.runtime.LicensedSnmpRequestClient;
 import com.jw.snmpdriver.snmp.runtime.SharedPollCoordinator;
@@ -32,6 +34,7 @@ public final class ServiceBundle extends AbstractBundle {
     private SnmpRequestClient requestClient;
     private ScheduledExecutorService scheduler;
     private SharedPollCoordinator runtime;
+    private CallbackExecutor callbacks;
 
     @Override
     protected synchronized void setupProcess(GatewayContext context) {
@@ -111,7 +114,8 @@ public final class ServiceBundle extends AbstractBundle {
                 thread.setDaemon(true);
                 return thread;
             });
-            runtime = new SharedPollCoordinator(requestClient, scheduler);
+            callbacks = new CallbackExecutor();
+            runtime = new SharedPollCoordinator(requestClient, scheduler, callbacks);
             requestClient.start();
             runtime.start();
             state = State.RUNNING;
@@ -178,6 +182,19 @@ public final class ServiceBundle extends AbstractBundle {
                 logger.warn("Failed to stop SNMP coordinator cleanly", error);
             }
         }
+        if (callbacks != null) {
+            try {
+                callbacks.shutdown();
+                if (!callbacks.awaitTermination(2, TimeUnit.SECONDS)) {
+                    callbacks.shutdownNow();
+                }
+            } catch (InterruptedException error) {
+                callbacks.shutdownNow();
+                Thread.currentThread().interrupt();
+            } catch (RuntimeException error) {
+                logger.warn("Failed to stop SNMP callbacks cleanly", error);
+            }
+        }
         if (requestClient != null) {
             try {
                 requestClient.close();
@@ -200,6 +217,7 @@ public final class ServiceBundle extends AbstractBundle {
             }
         }
         runtime = null;
+        callbacks = null;
         requestClient = null;
         dnsResolver = null;
         scheduler = null;

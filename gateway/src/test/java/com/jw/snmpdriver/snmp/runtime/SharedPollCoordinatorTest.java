@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.TimeUnit;
 
 import com.jw.snmpdriver.gateway.device.SNMPDeviceConfig;
@@ -43,6 +45,95 @@ class SharedPollCoordinatorTest {
     void stop() {
         coordinator.stop();
         scheduler.shutdownNow();
+    }
+
+    @Test
+    void callbacksRunOffCompletingThread() throws Exception {
+        SharedPollCoordinator async = new SharedPollCoordinator(client, scheduler);
+        async.start();
+        try {
+            CountDownLatch delivered = new CountDownLatch(1);
+            AtomicReference<Thread> callbackThread = new AtomicReference<>();
+            DevicePollHandle handle = async.registerDevice(endpoint("192.0.2.1"));
+            handle.subscribe(address(OID), 1_000, value -> {
+                callbackThread.set(Thread.currentThread());
+                delivered.countDown();
+            }, failures::add);
+            scheduler.runReady();
+            Thread receiver = Thread.currentThread();
+            client.gets.get(0).result().complete(success(binding(OID, 42)));
+            assertTrue(delivered.await(2, TimeUnit.SECONDS));
+            assertFalse(receiver == callbackThread.get(), "Business callbacks must leave the receiver");
+        } finally {
+            async.stop();
+        }
+    }
+
+    @Test
+    void runtimeShutdownNotifiesPendingGetAndCancelsPendingSet() {
+        DevicePollHandle handle = coordinator.registerDevice(endpoint("192.0.2.1"));
+        handle.subscribe(address(OID), 1_000, values::add, failures::add);
+        scheduler.runReady();
+        var set = handle.set(address(OID), new Integer32(7),
+                scheduler.nanoTime() + TimeUnit.SECONDS.toNanos(10)).toCompletableFuture();
+
+        coordinator.stop();
+
+        assertEquals(1, failures.size(), "Runtime shutdown must notify the outstanding GET");
+        assertTrue(failures.get(0) instanceof CancellationException);
+        assertThrows(CancellationException.class, set::join);
+        client.gets.get(0).result().complete(success(binding(OID, 42)));
+        assertTrue(values.isEmpty());
+        assertEquals(1, failures.size());
+    }
+
+    @Test
+    void closingQueuedDevicesReleasesPoolQueueCapacity() throws Exception {
+        CallbackExecutor callbacks = new CallbackExecutor(1, 2);
+        SharedPollCoordinator async = new SharedPollCoordinator(client, scheduler, callbacks,
+                scheduler::nanoTime);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch delivered = new CountDownLatch(1);
+        async.start();
+        try {
+            DevicePollHandle blocked = async.registerDevice(endpoint("blocked", "192.0.2.1", 1));
+            blocked.subscribe(address(OID), 1_000, value -> {
+                entered.countDown();
+                await(release);
+            }, error -> {});
+            scheduler.runReady();
+            client.gets.get(0).result().complete(success(binding(OID, 1)));
+            assertTrue(entered.await(2, TimeUnit.SECONDS));
+            for (int i = 0; i < 5; i++) {
+                DevicePollHandle retiring = async.registerDevice(endpoint("retiring", "192.0.2.2", 1));
+                retiring.subscribe(address(OID), 1_000, value -> {}, error -> {});
+                scheduler.runReady();
+                client.gets.get(client.gets.size() - 1).result().complete(success(binding(OID, 2)));
+                retiring.close();
+            }
+            DevicePollHandle current = async.registerDevice(endpoint("current", "192.0.2.3", 1));
+            current.subscribe(address(OID), 1_000, value -> delivered.countDown(), error -> {});
+            scheduler.runReady();
+            client.gets.get(client.gets.size() - 1).result().complete(success(binding(OID, 3)));
+            release.countDown();
+            assertTrue(delivered.await(2, TimeUnit.SECONDS), "Cancelled lane runners must release pool slots");
+        } finally {
+            release.countDown();
+            async.stop();
+            callbacks.shutdownNow();
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Callback was not released");
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(error);
+        }
     }
 
     @Test
@@ -253,11 +344,15 @@ class SharedPollCoordinatorTest {
     }
 
     private static SnmpEndpoint endpoint(String host) {
-        return new SnmpEndpoint("device-1", host, 161, SNMPDeviceConfig.IpFamily.IPV4,
+        return endpoint("device-1", host, 1);
+    }
+
+    private static SnmpEndpoint endpoint(String deviceId, String host, int maxInflight) {
+        return new SnmpEndpoint(deviceId, host, 161, SNMPDeviceConfig.IpFamily.IPV4,
                 SNMPDeviceConfig.Version.V2C, "", "", "",
                 SNMPDeviceConfig.SecurityLevel.NO_AUTH_NO_PRIV, SNMPDeviceConfig.AuthProtocol.SHA256,
                 "", SNMPDeviceConfig.PrivacyProtocol.AES128, "", "",
-                SNMPDeviceConfig.AccessMode.READ_WRITE, 2_000, 0, 25, 1_200, 1);
+                SNMPDeviceConfig.AccessMode.READ_WRITE, 2_000, 0, 25, 1_200, maxInflight);
     }
 
     private static ResolvedAddress address(NumericOid oid) {
