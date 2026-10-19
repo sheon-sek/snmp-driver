@@ -6,6 +6,7 @@
 - 编写方式：只读核对源码与 SNMP4J 3.12.2 官方源码包（Maven Central `snmp4j-3.12.2-sources.jar`，解压到临时目录后只做阅读）。**本文档编写期间没有运行 build/test/lint/Gateway 验证，也没有修改代码。**
 - 行号规则：本文中所有 `file:line` 都是本次亲自打开当前文件后确认的，没有沿用三份旧报告的行号。无法在本地确认的写作「待验证」。
 - 路径缩写：`S/` = `gateway/src/main/java/com/jw/snmpdriver/`；`B/` = `base/src/main/java/com/jw/ignition/`；`J/` = SNMP4J 3.12.2 源码包中的 `org/snmp4j/`（外部源码，不在本仓库内）。其余路径相对 repo root（`/home/sheon/Projects/snmp-driver`，见 Q15）。
+- 契约调查：已纳入 `f99b28d` 的 [M0-S 调查记录](research/M0S_CONTRACT_FINDINGS.md)。静态结论与待实测项目分开记录；本次修订未运行验证。
 - 修订：已回写 grilling 决策 Q1–Q18（§1.1）。术语以 `CONTEXT.md` 为准（Q6）；ADR 以仓库 `docs/adr/` 为权威来源（Q14）。
 
 ---
@@ -104,11 +105,11 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 |---|---|---|---|
 | R1 IPv6 绑定失败拖垮驱动 | **采纳（严重度上调）** | `Snmp4jRequestClient.java:66-69` 无条件创建 `[::]:0` mapping。SNMP4J 在**构造时就 bind**（`J/transport/DefaultUdpTransportMapping.java:83-91`；无参构造在 `:64-66` 立即 `new DatagramSocket`），所以 OMP 所说的「lazy bind」**驳回**。异常经 `ServiceBundle.java:120-125` 变成 `IllegalStateException`；模块启动时 `ServiceBundle.java:53-56` → `GatewayHook.java:49-58` 会让**整个模块 startup 失败**，不只是单个设备失败。 | M0-3 |
 | R2 SNMP4J 单线程分发 | **修正** | `Snmp4jRequestClient.java:70` 使用 `new Snmp(transport)`，它会创建默认的 `MessageDispatcherImpl`（`J/Snmp.java:229-230`、`:273-279`）。响应回调在 transport 监听线程中同步执行：`SharedPollCoordinator.java:441` 的 `thenCompose` → `:447-539`（持 DeviceState 锁）→ `finishSuccess :610-623` → `publishValue :985-990` → `SubscriptionBridge.java:224-246`（codec + `item.setValue`）。风险成立，但「必然大面积丢包」需要压测才能下结论。`MultiThreadedMessageDispatcher` 存在（`J/util/MultiThreadedMessageDispatcher.java:71`），但它用的 `ThreadPool.execute` 在线程全忙时会**阻塞**（`J/util/ThreadPool.java:81-125`），只是把背压转移到监听线程，并且没有丢弃计数，所以**不选它作为主方案**。 | M0-5 |
-| R3 Errored 粘滞 | **采纳 + 修正修复方案** | `SNMPDevice.java:483`、`:494`、`:503` 遇到 Errored 直接 return；`:515-516` 中 unexpected 会转为 Errored。分类依据：`SnmpFailureClassifier.java:58-66`（SnmpConfigurationException）、`:103-111`（SecurityException）、`:164-165`（IllegalArgumentException）、`:167`（兜底的 runtime 异常）。**对 OMP「classify 缺 phase 参数」的修正**：启动期失败在 `SNMPDevice.java:336`、`:346` 直接调用 `setStatus("Errored")`，从不经过 `handleFailure`；`handleFailure` 的调用方全部在运行期（`:193`、`:226`、`:253`，以及 bridge/writer 回调 `:274`、`:296`）。因此 phase 可以在 SNMPDevice 层区分，不必改 `classify` 的签名。**新发现的远端触发路径**：响应 OID 经 `Snmp4jRequestClient.java:644` 的 `NumericOid.parse` 解析，越界时抛 IAE（`NumericOid.java:20-37`），被 `:143-145` 包进 future，然后被归为 configuration/unexpected，设备永久 Errored。SNMP4J 解码能否产生这类 OID 待验证。 | M0-4 |
+| R3 Errored 粘滞 | **采纳 + 修正修复方案** | `SNMPDevice.java:483`、`:494`、`:503` 遇到 Errored 直接 return；`:515-516` 中 unexpected 会转为 Errored。分类依据：`SnmpFailureClassifier.java:58-66`（SnmpConfigurationException）、`:103-111`（SecurityException）、`:164-165`（IllegalArgumentException）、`:167`（兜底的 runtime 异常）。**对 OMP「classify 缺 phase 参数」的修正**：启动期失败在 `SNMPDevice.java:336`、`:346` 直接调用 `setStatus("Errored")`，从不经过 `handleFailure`；`handleFailure` 的调用方全部在运行期（`:193`、`:226`、`:253`，以及 bridge/writer 回调 `:274`、`:296`）。因此 phase 可以在 SNMPDevice 层区分，不必改 `classify` 的签名。**M0-S 修正**：当前 `toDottedString` 使用固定数字格式化，解码输出不能据此推导出 NumericOid 越界 IAE；撤回远端越界 OID 触发链的说法。一般运行期 Errored 粘滞仍成立，保留恢复修复。证据见调查记录 §5.5。 | M0-4 |
 | R4 <1000 ms 拒绝而不修订 | **修正** | 行为成立：`SNMPDevice.java:97-110` 只修订 null/NaN/负数；`DynamicAttributeReader.java:130-133` 注释说明这是刻意选择；`SubscriptionBridge.java:409-428`、`SharedPollCoordinator.java:205-211` 会拒绝。这属于兼容性行为变更，「违反规范」的说法证据不足。 | B1 不改，手册写明；路线图待决策 |
 | R5 写入同步阻塞 | **采纳** | `DynamicAttributeWriter.java:33`（60 s 上限）、`:147-153`、`:175`；`SNMPDevice.java:213-233` 逐项串行。具体占用哪个线程池待验证。 | 路线图 |
-| R6 SubscriptionModel 重复采样 | **待验证** | `SNMPDevice.java:113-124`、`:300-303` 把全部 DataItem（含动态项）交给 Milo `SubscriptionModel`。本地没有 Milo 源码，无法确认采样频率和质量码覆盖。 | M0 契约调查（只调查，不改） |
-| R7 全局单例污染 | **修正** | `Snmp4jRequestClient.java:72`、`:84-87`。另外 `new Snmp(transport)` 内部的 `initMessageDispatcher` 用的是无参 `new MPv3()`，它本身就走全局 `SecurityModels`/`SecurityProtocols`（`J/Snmp.java:247-253`）。`MPv3(USM)` 只隔离 SecurityModels，仍然使用全局 SecurityProtocols（`J/mp/MPv3.java:139-145`）；要完全隔离需用 5 参构造（`J/mp/MPv3.java:169-172`）加 `new SecurityProtocols(SecurityProtocolSet)`（`J/security/SecurityProtocols.java:112-115`）。「热重载必然互相覆盖」说得过满，**驳回**这一部分。但新增 Trap receiver 之前**必须**完成隔离。 | M0-6 |
+| R6 SubscriptionModel 重复采样 | **修正，静态已确认** | Milo 定期 read 后 setValue；当前动态 read 只取 SubscriptionBridge 缓存，不重复发送 GET，也不能推断 Bad 必然变 Good。双通道发布存在时序风险，实际通知与时间戳仍需 Gateway 实测。见调查记录 §1。 | M0-8 核对时间戳；发布所有权调整留后续专项，不在 M0 顺手重构 |
+| R7 全局单例污染 | **修正** | `Snmp4jRequestClient.java:72`、`:84-87`。另外 `new Snmp(transport)` 内部的 `initMessageDispatcher` 用的是无参 `new MPv3()`，它本身就走全局 `SecurityModels`/`SecurityProtocols`（`J/Snmp.java:247-253`）。`MPv3(USM)` 只隔离 SecurityModels，仍然使用全局 SecurityProtocols（`J/mp/MPv3.java:139-145`）；主安全模型隔离需用 5 参构造（`J/mp/MPv3.java:169-172`）加 `new SecurityProtocols(SecurityProtocolSet)`（`J/security/SecurityProtocols.java:112-115`）。五参构造仍有全局尺寸估算、计数器等读取，不能称为整个库完全隔离，见调查记录 §5.1。「热重载必然互相覆盖」说得过满，**驳回**这一部分。但新增 Trap receiver 之前**必须**完成隔离。 | M0-6 |
 | R8 DirectUserTarget 每请求重派生密钥 | **采纳（证据升级为已确认）** | 每次请求都 new 一个带口令的 target（`Snmp4jRequestClient.java:346-365`）。发送时 `MessageDispatcherImpl` 从 MPv3 缓存取出 engineID 写入 target（`J/MessageDispatcherImpl.java:629-635`、`:684-697`），触发 `localize` → `passwordToKey`（`J/DirectUserTarget.java:325-370`）。CPU 影响规模待基准测试。 | M0-7 |
 | R9 tooBig 不学习 | **修正** | `SharedPollCoordinator.java:457-466` 只递归拆当前批次，`selectBatch :541-568` 没有学习上限。「往返翻倍」不精确：拆两片时是 1 次失败加 2 次成功，递归时次数更多。 | 路线图（原 M0-9，Q13 顺延到 B1 之后） |
 | R10 License POST 只要求 READ | **修正** | 权限常量在 `LicenseManagementRouteRegistrar.java:13-16`，POST 挂载在 `:50-63`；另外 GET `/license/status` 会触发 `license.refresh()`（`:66-72`）。实际能否被只读用户访问取决于 Gateway 的 Web UI 访问配置。 | 路线图（改为 WRITE 并保留 CSRF，需负责人确认） |
@@ -128,7 +129,7 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 | OMP-A 报告证据错位 | **采纳** | 本文已全部重新锚定。 | — |
 | OMP-B R3 需要 phase 区分 | **修正** | 需要区分 phase，但在 SNMPDevice 层就能做到（见 R3 行）。 | M0-4 |
 | OMP-C SET 无 tooBig 处理 | **修正** | 单 varbind SET 收到 tooBig 无法再拆。现状已映射为 `Bad_EncodingLimitsExceeded`（`SnmpFailureClassifier.java:235`，经 `:113-122` 判为 legalResponse，熔断闭合），由 `Snmp4jRequestClient.java:301-308` 抛出。缺的是可操作的诊断文案和测试；多 varbind SET 时才需要真正的拆分策略。 | 路线图（原 M0-9，Q13） |
-| OMP-D 默认 1200 B 必然频繁 tooBig | **修正 / 部分驳回** | 默认值成立（`SNMPDeviceConfig.java:48`、`:64`），估算公式在 `SharedPollCoordinator.java:551`、`:557`。但每 OID 的估算 `24 + 2×len` 会**高估** BER 请求长度；而 tooBig 主要由**响应**大小决定，请求估算管不到。「默认配置必然 churn」证据不足，改为待互通验证。v3 头部 160 B 基线可能偏低，也一并待验证。 | 路线图（原 M0-9，Q13） |
+| OMP-D 默认 1200 B 必然频繁 tooBig | **修正 / 部分驳回** | 默认值与估算公式成立，但 1200 是批次估算预算，不是编码后硬上限，单个超预算条目仍可发出。v3 开销取决于名字、engineID、算法与 BER 长度；160 B 必然不足、默认必然频繁 tooBig 均无充分证据。保留默认值，后续测完整请求/响应长度和 tooBig 次数，见调查记录 §9。 | 路线图（原 M0-9，Q13） |
 | OMP-F v1 SET OID 回显假设 | **驳回** | RFC 1157 规定 v1 GetResponse 成功时回送请求的 varbind 列表，errorIndex 在 v1/v2c 都是 1-based；`Snmp4jRequestClient.java:323-333` 的检查对 v1 成立。 | — |
 | OMP-G `snmp.close()` 已存在 | **采纳（附条件）** | `Snmp4jRequestClient.java:651-659`、`ServiceBundle.java:181-187`。只对构造完成的客户端有效，构造失败的情况见 N3。 | — |
 | Codex：162 示例自相矛盾 | **采纳** | v1 的 `10162:162/udp` 与 `snmptrap <gw>:162` 不一致。按 D4 统一为 `-p 162:10162/udp`，模块端口配 10162，发送方发往宿主机 162。 | §4.10 |
@@ -182,10 +183,10 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
   1. 把 SNMPDevice 的状态转换抽成纯 Java 的 `DeviceStatusMachine`（同包，package-private），用于单测。SNMPDevice 委托给它，`setStatus` 的日志行为保持不变。
   2. 新增 `startupFailed` 标志，只在 `onStartup` 的两个 catch（`SNMPDevice.java:309-348`）中设置。只有它让 Errored 粘滞，直到设备重建。
   3. 运行期 unexpected 失败仍显示 `Errored`，但**可以恢复**：`markRunning`/`handleActivity`/`handleFailure` 只在 `startupFailed` 为真时提前 return；运行期 Errored 之后收到合法响应会回到 Running/Idle，License 失败转为 Unlicensed，circuit 失败转为 Degraded。
-  4. 收紧分类入口：`Snmp4jRequestClient.toRawBinding`（`:642-649`）中 `NumericOid.parse` 失败时，转换为 `SnmpProtocolException(genErr, index, "malformed response OID")`，归为协议错误（legalResponse），不再落入 configuration/unexpected。`getBatch` 的空批次 IAE（`:106-108`）属于内部不变量违反，保持 unexpected，但同样可以恢复。
+  4. 保留内部不变量错误分类。M0-S 未支持当前 UDP 解码链产生越界数字 OID 的假设，不把手造 OID 对象当远端复现，也不将内部 parse 失败无条件归为合法协议响应。`getBatch` 的空批次 IAE 属于内部不变量违反，保持 unexpected，但运行期状态可以恢复。
 - **改动文件**：`S/gateway/device/SNMPDevice.java`、新增 `S/gateway/device/DeviceStatusMachine.java`、`S/snmp/runtime/Snmp4jRequestClient.java`。
 - **验收**：运行期注入 IAE/SecurityException 后设备显示 Errored；随后注入合法响应，设备回到 Running。启动期 Secret/配置错误保持 Errored，不会被后续回调改写。
-- **单测**：`DeviceStatusMachineTest`，覆盖全部状态转换表：startup 粘滞；运行期 Errored → Running、→ Unlicensed、→ Degraded；shuttingDown 时忽略回调。`Snmp4jRequestClient` 中畸形 OID 的转换需要可测的静态方法，用单测覆盖。
+- **单测**：`DeviceStatusMachineTest`，覆盖全部状态转换表：startup 粘滞；运行期 Errored → Running、→ Unlicensed、→ Degraded；shuttingDown 时忽略回调。无需为未证实的远端越界 OID 路径新增转换工具。
 
 ### M0-5 R2：有界回调执行器，保持每设备顺序（P1）
 
@@ -202,7 +203,7 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 ### M0-6 R7：SNMP4J 安全模型隔离（P1，Trap 的前置条件）
 
 - **设计**：在 `Snmp4jRequestClient` 中显式组装：`SecurityProtocols protocols = new SecurityProtocols(SecurityProtocolSet.none)`，再逐个添加现有 6 种 auth 和 4 种 priv 算法（`:73-82`）；`USM usm = new USM(protocols, localEngineId, 0)`；`MPv3 mpv3 = new MPv3(localEngineId, null, protocols, SecurityModels.getCollection(new SecurityModel[]{usm}), CounterSupport.getInstance())`；`MessageDispatcherImpl` 中加入 `MPv1`/`MPv2c`/`mpv3`；最后 `new Snmp(dispatcher, ipv4Transport)`（`J/Snmp.java:312-322`，该构造不会自动添加 MP）。不再调用 `SecurityProtocols.getInstance()` 与 `SecurityModels.getInstance().addSecurityModel`。`authenticationProtocol()`/`privacyProtocol()`（`:388-424`）改为从实例 `protocols` 中查找。
-- **待验证**：SNMP4J 中是否还有其他路径隐式读取全局单例，例如 `DirectUserTarget.localize` 使用的静态 `SecurityProtocols.passwordToKey`（`J/DirectUserTarget.java:361`，它是基于协议对象的静态方法）。
+- **M0-S 边界**：`DirectUserTarget.localize` 的静态派生使用传入协议对象；`UsmSecurityParameters.getBERMaxLength` 仍读全局 SecurityProtocols，MPv1/MPv2c 和计数器也有全局路径。验收限定为不注册本模块 USM、不覆盖其他实例，不能据注册表检查宣称全库隔离。残余尺寸估算需 v3 集成测试，详见调查记录 §5.1。
 - **改动文件**：`S/snmp/runtime/Snmp4jRequestClient.java`。
 - **验收**：构造两个客户端实例后，全局 `SecurityModels.getInstance()` 中没有本模块的 USM；两个实例的 USM 互不覆盖；v3 GET 仍然可用（进程内集成测试）。
 - **单测**：`Snmp4jRequestClientIsolationTest`（不发网络包，只检查注册表）；v3 互通放在集成测试（§6.2）。
@@ -212,10 +213,10 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 - **设计**：
   1. 在 `Snmp4jRequestClient` 中维护 `LocalizedKeyCache`：键为 (`SnmpEndpoint` 对象身份，即设备 generation；authoritative engineID；auth/priv 协议 OID)，值为本地化后的 auth/priv key（`SecretOctetString`），容量上限 1024，采用 LRU。
   2. 发送前，如果 MPv3 的 engine 缓存中已有该地址的 engineID，就用 7 参构造 `DirectUserTarget(address, securityName, engineID, authProto, authKey, privProto, privKey)`（`J/DirectUserTarget.java:98-110`）直接传入已本地化的 key；否则沿用现有的口令型构造（第一次 discovery）。
-  3. 失效条件：设备 generation 变化（新 endpoint 对象）；收到 `SnmpSecurityReportException`（unknownEngineID、wrongDigest、decryptionError、notInTimeWindow）时，清除该 endpoint 的条目和 MPv3 中该地址的 engineID 缓存。不同口令、不同用户之间不能共用缓存条目。
+  3. 失效条件：设备 generation 变化（新 endpoint 对象）；收到 `SnmpSecurityReportException`（unknownEngineID、wrongDigest、decryptionError、notInTimeWindow）时，清除该 endpoint 的条目和 MPv3 中该地址的 engineID 缓存。SNMP4J 会内部处理部分 REPORT 并重发，不能只依赖业务异常失效；必须在实际 authoritative engineID 变化时重新选键，并防止旧 generation/在途响应污染新缓存。不同口令、不同用户之间不能共用缓存条目。
   4. 每次请求仍然新建 target 对象，避免在并发请求间共享可变 target（maxInflight 最大为 8）。
 - **改动文件**：`S/snmp/runtime/Snmp4jRequestClient.java`，必要时新增 `S/snmp/runtime/LocalizedKeyCache.java`。
-- **验收**：同一 v3 设备连续轮询时，`passwordToKey` 只在 discovery 或缓存失效后执行；设备换 engineID 后经一次 REPORT 能自动恢复。
+- **验收**：同一 v3 设备连续轮询时，`passwordToKey` 只在 discovery 或缓存失效后执行；设备换 engineID 后能有界恢复，不能预设一次 REPORT 足够；覆盖同址并发 discovery、内部 REPORT 重试与在途请求，不以 map 单次操作同步证明完整流程原子。
 - **单测**：`LocalizedKeyCacheTest`（键隔离、LRU、失效）；集成测试中用计数型 `AuthenticationProtocol` 包装统计派生次数。基准测试（CPU/请求）作为待验证项记录，不作为发布门槛。
 
 ### M0-8 N2：时间戳契约（P1）
@@ -225,7 +226,8 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
   2. `publishCachedDue` 重发的缓存值**保留原 sourceTime**，只更新 serverTime。
   3. 熔断期间的 `Uncertain_LastUsableValue` 保留最后一次成功的 sourceTime（`DeviceDiagnostics.java:121-135` 已有此逻辑，修复后才有意义）。
   4. 未订阅节点读 Value 仍返回 `Bad_WaitingForInitialData`（`DynamicAttributeReader.java:134-135`），B1 不实现按需 GET；`maxAge` 被忽略这一点写进手册。
-  5. Trap：`sourceTime` = Gateway 接收时刻；发送方 `sysUpTime.0` 以 TimeTicks 原值单独暴露，**不换算为墙钟**。
+  5. 动态项当前由 SubscriptionBridge 和 Milo SubscriptionModel 双通道发布。M0 保留现有发布结构，检查缓存 sourceTime 不前移、不凭 setValue 次数推算客户端通知；采样竞态与最终通知需后续 Gateway 实测，见调查记录 §1。
+  6. Trap：`sourceTime` = Gateway 接收时刻；发送方 `sysUpTime.0` 以 TimeTicks 原值单独暴露，**不换算为墙钟**。
 - **设计**：`SnmpValueCodec.toDataValue` 改为 `new DataValue(variant, StatusCode.GOOD, new DateTime(binding.receivedAt()), DateTime.now())`。
 - **改动文件**：`S/snmp/runtime/SnmpValueCodec.java`；核对 `S/gateway/device/SubscriptionBridge.java:232-240` 不覆盖 sourceTime。
 - **验收**：OPC 客户端读到的 SourceTimestamp 等于接收时刻；缓存重发不会让 SourceTimestamp 前移。
@@ -242,7 +244,7 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 
 ### M0 契约调查（P0，先于编码，1–2 人日）
 
-只读调查，产出一页记录，不写代码：Milo `SubscriptionModel` 对动态项的采样行为（R6）；8.3 SDK 中模块数据目录的 API（§4.6 持久化）；`DeviceExtensionPoint.validate` 能否读取其他设备的配置（§4.8 冲突校验）；8.3 中 `DeviceContext` 节点批量写的原子性（§4.7）。
+静态调查已完成，提交 `f99b28d`，记录见 [M0S_CONTRACT_FINDINGS.md](research/M0S_CONTRACT_FINDINGS.md)。需要授权的系统实测尚未执行，不阻止整理 M0 实施规格，不能据此视为 M1 验收通过。原调查范围：Milo `SubscriptionModel` 对动态项的采样行为（R6）；8.3 SDK 中模块数据目录的 API（§4.6 持久化）；`DeviceExtensionPoint.validate` 能否读取其他设备的配置（§4.8 冲突校验）；8.3 中 `DeviceContext` 节点批量写的原子性（§4.7）。
 
 ---
 
@@ -299,7 +301,7 @@ Notification 只归属已配置的 Device，不提供 Gateway 级「接收任意
   - `security`：COMMUNITY（v1/v2c，community 用常量时间比较，`MessageDigest.isEqual`；`trapCommunity` 为空时沿用 `readCommunity`，Q8），或 USM（securityName、发送方 engineID、securityLevel ≥ 设备配置）。
   - 认证失败（源地址属于本设备但 community/USM 不匹配）：计入 `AuthFailureCount`，`Traps/LastError` 提示检查 Trap Community（Q8）。
   - 是否接受 Inform。
-- **匹配**：只用 UDP 源地址，**不用** v1 PDU 中的 agent-addr（agent-addr 只作为字段展示）。NAT、代理场景通过 allowlist 处理。
+- **匹配**：只用 UDP 源地址，**不用** v1 PDU 中的 agent-addr（agent-addr 只作为字段展示）。NAT、代理场景必须实测源地址；allowlist 只接受可见的代理地址，不能恢复原设备区分。多个来源共用代理时可能广播到多个 Device，应优先选择经验证保留源 IP 的部署。
 - **多设备命中**：广播到所有命中的设备，各自独立计数（Q7，ADR 0001）。listener 级记录 `MultiMatchCount`，便于排查配置。
 - **未命中**：作为 Unmatched Notification 只计 listener 级 `UnmatchedCount` 后丢弃，不归属任何 Device；按源 IP 每分钟最多汇总一条日志；不 ACK Inform。
 - **DNS 刷新**：route 表在设备 host 的 DNS 缓存过期（5 min，`DnsResolver.java:25`）后重新解析刷新；解析失败时保留旧地址，并在 `Traps/LastError` 提示。
@@ -329,21 +331,21 @@ Notification 只归属已配置的 Device，不提供 Gateway 级「接收任意
 
 - **两个方向的权威方不同**（RFC 3414）：v3 Trap 的权威方是**发送方**；v3 Inform 的权威方是**接收方**，即 Gateway。
 - **本地引擎身份**：由 `TrapEngineIdentity` 持有，整个 Registry 只有一个（不放在任一 Device 目录，否则删除或重命名设备会改变共享身份）。
-  - 文件：模块数据目录下的 `com.jw.snmpdriver/trap-engine.properties`，内容为 `engineId=<hex>`、`engineBoots=<n>`。具体使用哪个 SDK API 获取数据目录待验证（M0 契约调查）。
+  - 文件：`gatewayContext.getSystemManager().getModuleConfigLocalDir("com.jw.snmpdriver").resolve("trap-engine.properties")`，即 `$data/config/local/com.jw.snmpdriver/trap-engine.properties`。调用方创建目录，内容为 `engineId=<hex>`、`engineBoots=<n>`。API 与备份契约见调查记录 §2，原子写能力仍需目标文件系统实测。
   - 启动流程：读取文件，`boots = 旧值 + 1`，用「临时文件 + fsync + `ATOMIC_MOVE`」写回，**写成功后才** `listen`。第一次启动时用 `MPv3.createLocalEngineID()` 生成 engineID，此后不再改变。
   - 写入失败：v3 Inform 停用，相关设备 `Traps/LastError` 写明原因；v1/v2c/v3 Trap 不受影响。
   - 文件损坏：改名为 `.corrupt-<ts>` 备份，生成新的 engineID，记录 warn 日志，提示发送方需重新配置 engineID。
   - `engineBoots` 达到 2147483647 时停用 v3 Inform（RFC 3414 §2.2.2）。
   - boots 只在 Registry（引擎）初始化时递增，**与设备启动或配置保存无关**。
-  - Gateway 备份恢复或克隆部署会产生重复的 engineID，手册中提示。
+  - config/local 包含在备份中，恢复时可选择是否恢复 local 内容。恢复旧备份可能使 boots 回退，克隆可能复制身份，不能以旧值加一保证超过远端记录。M1c 前必须细化恢复与克隆处理流程，验证恢复 local/不恢复 local 两种情况；不能自动清时间窗缓存绕过防重放。
   - 诊断节点 `Traps/LocalEngineId` 暴露 engineID（只读 hex），方便配置发送方。
 - **USM 隔离**：Trap 栈使用独立的 `SecurityProtocols`/`USM`/`MPv3`（做法同 M0-6），与轮询栈互不共享。
 - **用户注册**：
-  - v3 Trap（Q4，`docs/adr/0003-v3-trap-requires-sender-engine-id.md`）：强制要求设备配置 `trapSenderEngineId`，用 `usm.addUser(securityName, senderEngineId, user)` 注册本地化用户；**不注册**可以按任意 engineID 现场本地化的用户（否则大量伪造 engineID 会造成 CPU 与内存消耗，相关逻辑见 `J/security/USM.java:349-386`）。必要时可为用户设置 `LocalizationGrant.never`（`J/security/UsmUser.java:219`），具体 API 用法待验证。
+  - v3 Trap（Q4，`docs/adr/0003-v3-trap-requires-sender-engine-id.md`）：强制要求设备配置 `trapSenderEngineId`，用 `usm.addUser(user, senderEngineId)` 在注册时按固定 engineID 本地化；旧三参 API 已弃用；**不注册**可以按任意 engineID 现场本地化的用户（否则大量伪造 engineID 会造成 CPU 与内存消耗，相关逻辑见 `J/security/USM.java:349-386`）。已本地化用户的 grant 为 never。若预派生密钥再用六参 UsmUser 构造，auth/priv 参数必须为密钥而非普通口令；不能仅给未本地化通配用户设置 never 就期待自动派生。见调查记录 §5.4。
   - 设备 engineID 变化（换板、复位）后需重新配置 `trapSenderEngineId`。手册给出查询方法：对设备执行 `snmpget` 读取 `snmpEngineID.0`（`1.3.6.1.6.3.10.2.1.1.0`），例如 `snmpget -v 2c -c <community> <device-host> 1.3.6.1.6.3.10.2.1.1.0`，或 v3 下 `snmpget -v 3 -u <user> -l authPriv -a <auth-proto> -A <auth> -x <priv-proto> -X <priv> <device-host> 1.3.6.1.6.3.10.2.1.1.0`，把返回的 hex 填入 `trapSenderEngineId`。
   - v3 Inform：用户本地化到 Gateway 本地 engineID，不受 `trapSenderEngineId` 影响。
 - **冲突**：同一 listener 上相同 securityName 的认证在路由之前就完成，无法靠源 IP 区分。因此同一 listener 上同名 securityName 必须使用**同一** SecretConfig 引用和相同协议，否则保存时报错；运行期再做一次 plaintext 比对，不一致的设备 `Traps/Status=Degraded`。
-- **时间窗**：v3 Trap 的时间窗和 engineBoots 跟踪由 SNMP4J `UsmTimeTable` 负责。发送方重启、boots 回退、重放场景的具体行为**待验证**（§6.2 互通测试覆盖）。
+- **时间窗**：认证路径由 `UsmTimeTable` 跟踪。远端 boots 增大可更新，回退拒绝；相同 boots 下超窗旧包拒绝，但窗口内重复包可能通过，不能当逐包去重。Inform 的本地权威时间窗与 Trap 的远端权威时间窗分开验收，noAuthNoPriv 不套用认证防重放保证；厂商互通仍待实测。见调查记录 §5.3。
 
 ### 4.7 OPC 节点模型（快照与逐条事件的语义边界）
 
@@ -373,7 +375,7 @@ Notification 只归属已配置的 Device，不提供 Gateway 级「接收任意
 | `Last/AgentUpTime` | UInt32 | `sysUpTime.0` 的 TimeTicks 原值 |
 | `Last/Varbinds` | String | JSON 有序数组 `[{"oid","type","value"}]`，最大 16 KiB，超出时截断并加 `"truncated":true` |
 
-- **一致性**：同一条 Trap 派生的 `Last/*` 一次批量更新，使用相同的 sourceTime。客户端应先读 `Sequence`，再读其余字段，最后复核 `Sequence` 是否变化。8.3 节点批量写是否原子待验证（M0 契约调查）。
+- **一致性**：`Last/*` 为非原子镜像，相同 sourceTime 不提供跨节点事务或通知顺序保证。撤回单纯 Sequence 双读保证一致性的算法。M1b 编码前需确定一致读取契约，候选为一个 Read 请求固定一次不可变 Snapshot 引用，或新增包含 Sequence 的单值快照；这些候选尚未批准，不视为新增节点承诺。跨多次 Read 仍可能看到不同快照。现有 Sequence 每条加一与 Q2 快照语义不变。见调查记录 §4。
 - **动态路径（有界，Q10 保留）**：在 `ItemPathParser` 中，访问前缀 `TRAP` 走独立分支（当前 `:41-48` 遇到非 RO/RW 前缀会报错，扩展时不影响既有语法）：
   - `TRAP.Count/<trapOID>`（UInt64）
   - `TRAP.LastTime/<trapOID>`（DateTime）
@@ -401,12 +403,12 @@ Notification 只归属已配置的 Device，不提供 Gateway 级「接收任意
 
 `SNMPDeviceConfig` 是 record，新增字段会改变 `defaults()`（`SNMPDeviceConfig.java:59-66`）和资源 schema。
 
-**升级兼容（Q12，硬性要求，M1 退出条件）**：1.0.0 的设备配置升级到 1.1.0 后**不改即可加载**；缺少的 `trap*` 字段取默认值，Trap 默认关闭（`trapEnabled=false`），轮询行为不变。具体迁移机制（record 缺字段时如何取默认值）仍待验证（§5.3），但无论机制如何都必须满足该要求；验收方式是在 igdev Gateway 导入 1.0.0 配置做升级测试（§6.3）。
+**升级兼容（Q12，硬性要求，M1 退出条件）**：1.0.0 的设备配置升级到 1.1.0 后**不改即可加载**；缺少的 `trap*` 字段取默认值，Trap 默认关闭（`trapEnabled=false`），轮询行为不变。M0-S 确认 record 缺字段只得 0/false/null，不自动调用业务 defaults。M1a 在 decode 前仅为缺失的新 trap* 字段补默认值，再沿用原解码器与 SecretConfig adapter；显式非法值保留并交给校验，不能覆盖旧轮询配置；验收方式是在 igdev Gateway 导入 1.0.0 配置做升级测试（§6.3）。
 
 **保存时校验**（`SNMPDeviceExtensionPoint.validate`，现有代码 `:75-117`）：
 
 - 单设备：端口范围、IP 字面量、engineID hex 格式与长度、allowlist 语法、限速范围；`trapSecurity=USM` 时要求设备 version 为 V3；COMMUNITY 模式下 trapCommunity 与 readCommunity 至少有一个。
-- 跨设备（D4）：同一端口上 bindAddress 必须完全相同；同一 listener 上同名 USM securityName 必须使用相同的 SecretConfig 引用和协议。数据来源是 ServiceBundle 中已注册设备的配置（`ServiceBundle.java:26`、`:158-164`）。validate 是否看得到被禁用的设备待验证；`registry.acquire` 运行期再做一次相同检查，冲突的设备 `Traps/Status=Degraded`，LastError 写明冲突的对象。
+- 跨设备（D4）：同一端口上 bindAddress 必须完全相同；同一 listener 上同名 USM securityName 必须使用相同的 SecretConfig 引用和协议。ServiceBundle 只保存运行时 Device，不是包含禁用或创建失败设备的完整配置集合。M1a 前需确定可识别当前资源的配置快照/资源层入口，避免编辑自身误报、递归解码，并覆盖禁用资源、并发保存和批量导入；完整保存期拒绝仍是 D4 要求，入口未解决前不宣布 M1a 可实施；`registry.acquire` 运行期再做一次相同检查，冲突的设备 `Traps/Status=Degraded`，LastError 写明冲突的对象。
 
 ### 4.9 License 行为（Q5）
 
@@ -421,7 +423,7 @@ Notification 只归属已配置的 Device，不提供 Gateway 级「接收任意
 |---|---|
 | 默认 | `trapPort=162`。bind 失败时只有 Trap 功能 Degraded，轮询照常 |
 | Linux（首推） | 模块配置 `trapPort=10162`，在 nftables 中把 162 重定向到 10162（见下）。**不推荐** `setcap cap_net_bind_service`（权限作用于整个 JVM）|
-| Windows | 停用并禁用系统 SNMP Trap 服务（服务名通常为 `SNMPTRAP`），放行 UDP 162 入站 |
+| Windows | 先检查 `SNMPTRAP` 服务是否存在、运行及 UDP 162 的地址/PID，再由运维按授权停用冲突服务并放行 UDP 162 入站 |
 | Docker / igdev | `-p 162:10162/udp`，模块配置 10162，发送方发往宿主机 162 |
 
 nftables 示例（运维侧执行，模块不负责）：
@@ -433,7 +435,7 @@ table inet snmptrap {
 }
 ```
 
-`prerouting` 处理外部流量，`output` 处理本机发往 162 的流量（便于本机测试）。REDIRECT 保留源 IP，所以源地址路由仍然有效。Docker 的 userland-proxy 和 rootless 网络可能改写源 IP，导致路由失败（**待验证**），手册中提示改用 allowlist 或 host 网络。
+`prerouting` 处理外部流量，`output` 处理本机发往 162 的流量（便于本机测试）。REDIRECT 保留源 IP，所以源地址路由仍然有效。Docker 的 userland-proxy 和 rootless 网络可能改写源 IP，导致路由失败（**待验证**），allowlist 不能恢复原 IP；应先验证保留源地址的网络方案，host 网络限定目标平台且实测，rootless 的宿主机 162 仍受低端口权限限制。
 
 `Traps/LastError` 文案模板：
 
@@ -478,7 +480,7 @@ Docker: publish -p 162:10162/udp and set Trap Port to 10162.
 
 | 里程碑 | 内容 | 人日 |
 |---|---|---|
-| M0-S | 契约调查（§3 末尾） | 1–2 |
+| M0-S | 静态契约调查已完成，见 `f99b28d`；系统实测留对应里程碑 | 1–2 |
 | M0 | M0-1…M0-8（P0 全部 + R2、R7、R8、N2，Q13） | **8–12** |
 | M1a | Registry、listener 所有权/引用计数、bind 降级与重试、配置字段（含 1.0.0 配置升级兼容，Q12）、校验 | 3–4 |
 | M1b | v1/v2c Trap、v2c Inform ACK/去重、v1→v2 转换、路由、限速/队列、`Traps/` 节点、`TRAP.*` 路径、License | 4–5 |
@@ -501,12 +503,16 @@ Docker: publish -p 162:10162/udp and set Trap Port to 10162.
 | R2 改为异步后改变回调时序，引发回归 | 轮询值乱序或丢失 | 每设备 SerialExecutor；M0-1 先补测试 |
 | 新增 record 字段对旧配置的兼容性 | 升级后设备无法加载 | Q12 硬性要求，列为 M1 退出条件；igdev 上导入 1.0.0 配置做升级测试 |
 | v3 与厂商实现的互通（engineID、时间窗、算法） | v3 Trap/Inform 不可用 | 用 net-snmp 交叉验证；手册列出已验证的组合 |
-| Docker/rootless 改写源 IP | 路由失败，Notification 被记为 Unmatched Notification | allowlist；手册提示 |
+| Docker/rootless 改写源 IP | 路由失败，Notification 被记为 Unmatched Notification | 优先验证保留源 IP 的部署；allowlist 只能接受代理地址，不能恢复设备隔离 |
 | 跨设备校验看不到禁用设备 | 冲突配置启动后才暴露 | 运行期复查并降级，LastError 写明 |
 | 快照语义被误解为逐条事件 | 现场漏报警 | 手册原文写明边界；路线图 Event Streams/SQL |
 | 冗余 Gateway | 双节点都接收，重复计数 | B1 不支持，手册注明（Q3） |
 
-### 5.3 待验证项
+### 5.3 调查结论与剩余实测
+
+原十项已由 [M0-S 调查记录](research/M0S_CONTRACT_FINDINGS.md) 覆盖。下列条目保留为原调查索引，不能把它们全部视为未调查或已经实测。静态结论以该记录各节为准；待执行项、授权边界见记录末尾清单。M1a 资源校验入口、M1b 一致快照读取契约、M1c 恢复/克隆身份流程需在对应里程碑编码前落定。
+
+### 5.3.1 原调查索引
 
 1. Milo `SubscriptionModel` 对动态 DataItem 是否额外调用 `read()`，以及是否覆盖质量码（R6）。
 2. 8.3 SDK 获取模块数据目录的 API，以及该目录在备份恢复中的行为。
@@ -577,7 +583,7 @@ snmpinform -v 3 -u <user> -l authPriv -a SHA-256 -A <auth> -x AES -X <priv> <gw-
 
 - 版本 × 安全等级 × auth/priv 算法组合（至少 MD5/SHA1/SHA-256/SHA-512 × DES/AES128/AES256）。
 - 错误 community、口令、engineID。
-- Gateway 重启后 v3 Inform 继续可用（boots 递增）；发送方重启。
+- Gateway 重启后 v3 Inform 继续可用（boots 递增）；发送方重启。分别覆盖恢复/不恢复 local、旧备份 boots 回退、克隆身份、窗口内重复与超窗旧包，不用清缓存规避重放校验。
 - 端口：被占用时 Degraded 且轮询正常；释放后在 30 s 内自动恢复。
 - 两个设备共享 listener；同端口不同 bindAddress 时保存报错。
 - 设备禁用后再启用；模块重载。
@@ -601,7 +607,7 @@ snmpinform -v 3 -u <user> -l authPriv -a SHA-256 -A <auth> -x AES -X <priv> <gw-
 
 | 版本 | 内容 | 前置条件 |
 |---|---|---|
-| 1.1.x | 原 M0-9（SET tooBig 诊断、R9 批次学习上限、N6 有界拒绝缓存、OMP-D 记录；Q13 顺延）、R4 修订策略（钳制或拒绝）、R5 异步/并行写入、R10 License POST 改 WRITE（保留 CSRF）、R12 有限重试、N4 DNS single-flight 与多地址回退、R6 调查结论落地、按需单次读/maxAge | 负责人决策（R4、R10） |
+| 1.1.x | 原 M0-9（SET tooBig 诊断、R9 批次学习上限、N6 有界拒绝缓存、OMP-D 记录；Q13 顺延）、R4 修订策略（钳制或拒绝）、R5 异步/并行写入、R10 License POST 改 WRITE（保留 CSRF）、R12 有限重试、N4 DNS single-flight 与多地址回退、R6 动态项发布所有权专项（完整覆盖 create/modify/delete/restore/mode-change）、按需单次读/maxAge | 负责人决策（R4、R10） |
 | 1.2 | GETNEXT/GETBULK/Walk（经过 License、并发预算和熔断，不直接持有 Snmp 调用 TreeUtils）、数字 OID 有界发现快照 | — |
 | 1.3 | MIB 离线字典加载（见 `docs/adr/0006-defer-mib-parsing.md`）、Trap 名称/enum 翻译、类型推断 | 字典 schema |
 | 1.3+ | Table 快照、OPC Browse（基于发现快照、分页，不在 Browse 线程上同步 walk） | SDK Browse 契约调查 |
