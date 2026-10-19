@@ -52,7 +52,6 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     private final DeviceDiagnostics diagnostics;
 
     private final DeviceStatusMachine statusMachine = new DeviceStatusMachine(this::publishStatus);
-    private volatile long statusGeneration;
     private volatile DevicePollHandle pollHandle;
     private volatile SubscriptionBridge subscriptionBridge;
     private volatile DynamicAttributeReader attributeReader;
@@ -172,7 +171,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             TimestampsToReturn timestamps,
             List<ReadValueId> readValueIds
     ) {
-        long generation = statusGeneration;
+        long generation = statusMachine.currentGeneration();
         DynamicAttributeReader reader = attributeReader;
         if (reader == null) {
             return super.read(readContext, maxAge, timestamps, readValueIds);
@@ -206,7 +205,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             WriteContext writeContext,
             List<WriteValue> writeValues
     ) {
-        long generation = statusGeneration;
+        long generation = statusMachine.currentGeneration();
         DynamicAttributeWriter writer = attributeWriter;
         if (writer == null) {
             return super.write(writeContext, writeValues);
@@ -261,7 +260,6 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
 
     private void onStartup() {
         long generation = statusMachine.beginGeneration();
-        statusGeneration = generation;
         try {
             createAddressSpace();
             services.ensureStarted();
@@ -498,7 +496,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     }
 
     private void handleFailure(Throwable error) {
-        handleFailure(statusGeneration, error);
+        handleFailure(statusMachine.currentGeneration(), error);
     }
 
     private void handleFailure(long generation, Throwable error) {

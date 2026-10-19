@@ -32,7 +32,7 @@ class SharedPollCoordinatorTest {
     private final ControlledScheduler scheduler = new ControlledScheduler();
     private final FakeSnmpRequestClient client = new FakeSnmpRequestClient();
     private final SharedPollCoordinator coordinator =
-            new SharedPollCoordinator(client, scheduler, scheduler::nanoTime);
+            new SharedPollCoordinator(client, scheduler, new CallbackExecutor(Runnable::run, 4096), scheduler::nanoTime);
     private final List<RawBinding> values = new ArrayList<>();
     private final List<Throwable> failures = new ArrayList<>();
 
@@ -49,7 +49,8 @@ class SharedPollCoordinatorTest {
 
     @Test
     void callbacksRunOffCompletingThread() throws Exception {
-        SharedPollCoordinator async = new SharedPollCoordinator(client, scheduler);
+        CallbackExecutor callbacks = new CallbackExecutor();
+        SharedPollCoordinator async = new SharedPollCoordinator(client, scheduler, callbacks);
         async.start();
         try {
             CountDownLatch delivered = new CountDownLatch(1);
@@ -66,6 +67,7 @@ class SharedPollCoordinatorTest {
             assertFalse(receiver == callbackThread.get(), "Business callbacks must leave the receiver");
         } finally {
             async.stop();
+            callbacks.shutdownNow();
         }
     }
 

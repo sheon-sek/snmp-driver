@@ -42,42 +42,21 @@ public final class SharedPollCoordinator {
     private final SnmpRequestClient requestClient;
     private final ScheduledExecutorService scheduler;
     private final CallbackExecutor callbacks;
-    private final boolean ownsCallbacks;
     private final LongSupplier nanoClock;
     private final Map<String, DeviceState> devices = new ConcurrentHashMap<>();
     private final AtomicLong generationSequence = new AtomicLong();
     private final AtomicBoolean accepting = new AtomicBoolean();
     private final AtomicBoolean running = new AtomicBoolean();
 
-    public SharedPollCoordinator(
-            SnmpRequestClient requestClient,
-            ScheduledExecutorService scheduler
-    ) {
-        this(requestClient, scheduler, new CallbackExecutor(), System::nanoTime, true);
-    }
-
-    SharedPollCoordinator(
-            SnmpRequestClient requestClient,
-            ScheduledExecutorService scheduler,
-            LongSupplier nanoClock
-    ) {
-        this(requestClient, scheduler, new CallbackExecutor(Runnable::run, 4096), nanoClock, true);
-    }
-
+    /** The caller owns the client, scheduler and callbacks, and closes them after stopping this coordinator. */
     public SharedPollCoordinator(SnmpRequestClient requestClient,
                                  ScheduledExecutorService scheduler, CallbackExecutor callbacks) {
-        this(requestClient, scheduler, callbacks, System::nanoTime, false);
+        this(requestClient, scheduler, callbacks, System::nanoTime);
     }
 
     SharedPollCoordinator(SnmpRequestClient requestClient, ScheduledExecutorService scheduler,
                           CallbackExecutor callbacks, LongSupplier nanoClock) {
-        this(requestClient, scheduler, callbacks, nanoClock, false);
-    }
-
-    private SharedPollCoordinator(SnmpRequestClient requestClient, ScheduledExecutorService scheduler,
-                                  CallbackExecutor callbacks, LongSupplier nanoClock, boolean ownsCallbacks) {
         this.callbacks = Objects.requireNonNull(callbacks);
-        this.ownsCallbacks = ownsCallbacks;
         this.requestClient = Objects.requireNonNull(requestClient);
         this.scheduler = Objects.requireNonNull(scheduler);
         this.nanoClock = Objects.requireNonNull(nanoClock);
@@ -96,11 +75,8 @@ public final class SharedPollCoordinator {
         if (!running.getAndSet(false)) {
             return;
         }
-        devices.values().forEach(state -> state.close("runtime shutdown"));
+        devices.values().forEach(state -> state.close("runtime shutdown", true));
         devices.clear();
-        if (ownsCallbacks) {
-            callbacks.shutdownNow();
-        }
         logger.info("SNMP poll coordinator stopped");
     }
 
@@ -115,7 +91,7 @@ public final class SharedPollCoordinator {
         );
         DeviceState previous = devices.put(endpoint.deviceId(), state);
         if (previous != null) {
-            previous.close("device reconfigured");
+            previous.close("device reconfigured", false);
         }
         logger.info(
                 "SNMP device runtime registered device={} host={} port={} version={} generation={}",
@@ -196,7 +172,7 @@ public final class SharedPollCoordinator {
         public void close() {
             if (closed.compareAndSet(false, true)) {
                 devices.remove(state.endpoint.deviceId(), state);
-                state.close("device lease closed");
+                state.close("device lease closed", false);
             }
         }
     }
@@ -880,11 +856,8 @@ public final class SharedPollCoordinator {
                     .sum();
             double minimum = entries.values().stream()
                     .filter(PollEntry::hasSubscribers)
-                    .mapToLong(entry -> entry.intervalMillis)
+                    .mapToDouble(entry -> entry.intervalMillis)
                     .min()
-                    .stream()
-                    .mapToDouble(value -> (double) value)
-                    .findFirst()
                     .orElse(Double.NaN);
             return new DevicePollSnapshot(
                     subscriptions,
@@ -983,7 +956,7 @@ public final class SharedPollCoordinator {
             }
         }
 
-        private synchronized void close(String reason) {
+        private synchronized void close(String reason, boolean notifyInFlight) {
             if (closed) {
                 return;
             }
@@ -995,7 +968,7 @@ public final class SharedPollCoordinator {
                 wakeTask = null;
             }
             CancellationException cancelled = new CancellationException(reason);
-            if (reason.equals("runtime shutdown")) {
+            if (notifyInFlight) {
                 entries.values().stream().filter(entry -> entry.inFlight)
                         .forEach(entry -> entry.publishFailure(cancelled, nanoClock.getAsLong()));
             }

@@ -266,6 +266,40 @@ class Snmp4jKeyCacheTest {
     }
 
     @Test
+    void discoveryReportAfterTimeoutCannotReplaceTheNewGenerationEngineOrKeys() throws Exception {
+        try (Device device = new Device(); DnsResolver resolver = new DnsResolver()) {
+            ClientFactory factory = new ClientFactory();
+            try (Snmp4jRequestClient client = new Snmp4jRequestClient(resolver, factory)) {
+                CountingAuth auth = factory.countDerivations();
+                client.start();
+                device.holdResponse.set(true);
+                var expired = client.getBatch(device.endpoint(200), List.of(VALUE_OID)).toCompletableFuture();
+                Runnable lateDiscovery = device.outbound.poll(5, TimeUnit.SECONDS);
+                assertNotNull(lateDiscovery, "Capture the encoded old-engine discovery REPORT");
+                var timeout = assertThrows(java.util.concurrent.ExecutionException.class,
+                        () -> expired.get(5, TimeUnit.SECONDS));
+                assertTrue(timeout.getCause() instanceof SnmpNoResponseException);
+
+                device.replaceEngine();
+                SnmpEndpoint replacement = device.endpoint();
+                get(client, replacement);
+                int warmCalls = auth.calls.get();
+                CompletableFuture<Void> processed = new CompletableFuture<>();
+                factory.nextProcessed = processed;
+                lateDiscovery.run();
+                processed.get(5, TimeUnit.SECONDS);
+
+                MPv3 model = (MPv3) factory.session.getMessageProcessingModel(MPv3.ID);
+                assertEquals(new OctetString(device.engineId), model.getEngineID(
+                        new UdpAddress(InetAddress.getByName(replacement.host()), replacement.port())),
+                        "An expired discovery must not overwrite the current engine hint");
+                get(client, replacement);
+                assertEquals(warmCalls, auth.calls.get(), "The current generation must remain hot after the late REPORT");
+            }
+        }
+    }
+
+    @Test
     void silentEngineReplacementTimesOutThenRediscoversWithoutBusinessReport() throws Exception {
         try (Device device = new Device(); DnsResolver resolver = new DnsResolver()) {
             ClientFactory factory = new ClientFactory();
@@ -360,11 +394,27 @@ class Snmp4jKeyCacheTest {
 
     private static final class ClientFactory implements Snmp4jRequestClient.TransportFactory {
         private Snmp session;
+        private volatile CompletableFuture<Void> nextProcessed;
         private final Set<Target<?>> targets = Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
 
         @Override
         public DefaultUdpTransportMapping createIpv4() throws IOException {
             return new DefaultUdpTransportMapping() {
+                @Override
+                protected void fireProcessMessage(UdpAddress address, ByteBuffer message,
+                                                  TransportStateReference state) {
+                    // Capture before dispatch: completing an earlier request can wake the test
+                    // and arm the next observation while that earlier dispatch is still returning.
+                    CompletableFuture<Void> processed = nextProcessed;
+                    if (processed != null) {
+                        nextProcessed = null;
+                    }
+                    super.fireProcessMessage(address, message, state);
+                    if (processed != null) {
+                        processed.complete(null);
+                    }
+                }
+
                 @Override
                 public void sendMessage(UdpAddress address, byte[] message, TransportStateReference state,
                                         long timeout, int retries) throws IOException {
@@ -421,6 +471,11 @@ class Snmp4jKeyCacheTest {
                 @Override
                 public int sendReport(MessageDispatcher dispatcher, ScopedPDU pdu, int level, int model,
                                       OctetString name, int maxSize, StateReference<?> state, VariableBinding payload) {
+                    if (payload.getOid().equals(SnmpConstants.usmStatsUnknownEngineIDs)) {
+                        // Model an agent's anonymous noAuth discovery REPORT, including the cached USM name.
+                        ((org.snmp4j.security.UsmSecurityStateReference) state.getSecurityStateReference())
+                                .setSecurityName(new byte[0]);
+                    }
                     if (dropUnknownReports.get() && payload.getOid().equals(SnmpConstants.usmStatsUnknownEngineIDs)) {
                         return SnmpConstants.SNMP_MP_OK;
                     }

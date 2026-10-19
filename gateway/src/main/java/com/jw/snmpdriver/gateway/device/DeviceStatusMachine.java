@@ -24,6 +24,10 @@ final class DeviceStatusMachine {
         return ++generation;
     }
 
+    synchronized long currentGeneration() {
+        return generation;
+    }
+
     synchronized void shutdown() {
         shuttingDown = true;
     }

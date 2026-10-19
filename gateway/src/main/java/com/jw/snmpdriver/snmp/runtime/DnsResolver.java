@@ -55,10 +55,6 @@ public final class DnsResolver implements AutoCloseable {
             new ThreadPoolExecutor.AbortPolicy()
     );
 
-    public CompletionStage<UdpAddress> resolve(SnmpEndpoint endpoint) {
-        return resolve(endpoint, true);
-    }
-
     CompletionStage<UdpAddress> resolve(SnmpEndpoint endpoint, boolean ipv6Available) {
         String key = ipv6Available + ":" + endpoint.ipFamily() + ":" + endpoint.host() + ":" + endpoint.port();
         long now = System.nanoTime();

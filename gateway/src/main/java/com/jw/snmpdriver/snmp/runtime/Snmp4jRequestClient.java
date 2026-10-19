@@ -216,9 +216,10 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
                                    HeaderData header, Integer32 level, Integer32 maxSize, StatusInformation status,
                                    OctetString name, OctetString engine, Integer32 version, SecurityParameters parameters,
                                    BEROutputStream scoped, SecurityStateReference state) throws IOException {
-            // MPv3 otherwise learns the engine before validating a response. Reject retired requests before that write.
-            if (state instanceof GenerationSecurityState generation && generation.endpoint != null
-                    && !keys.isCurrent(generation.endpoint)) {
+            // This polling client only accepts replies owned by a current request. After timeout MPv3
+            // creates a fresh state with no endpoint; reject it before USM or MPv3 can learn an engine.
+            if (!(state instanceof GenerationSecurityState generation) || generation.endpoint == null
+                    || !keys.isCurrent(generation.endpoint)) {
                 return SnmpConstants.SNMP_MP_MATCH_ERROR;
             }
             return super.extractScopedPDU(message, model, transport, header, level, maxSize, status,

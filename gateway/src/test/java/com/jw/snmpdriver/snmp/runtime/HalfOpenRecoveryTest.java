@@ -30,7 +30,7 @@ class HalfOpenRecoveryTest {
     private final ControlledScheduler scheduler = new ControlledScheduler();
     private final FakeSnmpRequestClient client = new FakeSnmpRequestClient();
     private final SharedPollCoordinator coordinator =
-            new SharedPollCoordinator(client, scheduler, scheduler::nanoTime);
+            new SharedPollCoordinator(client, scheduler, new CallbackExecutor(Runnable::run, 4096), scheduler::nanoTime);
     private final List<RawBinding> values = new ArrayList<>();
 
     @AfterEach

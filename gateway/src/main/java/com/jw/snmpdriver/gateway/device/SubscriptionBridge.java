@@ -22,7 +22,9 @@ import org.eclipse.milo.opcua.sdk.server.items.MonitoredItem;
 import org.eclipse.milo.opcua.stack.core.AttributeId;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
+import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
+import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -232,7 +234,8 @@ public final class SubscriptionBridge {
                                 value = codec.toDataValue(address, raw);
                                 recordCodecRecovery(nodeId, address);
                             } catch (SnmpValueException error) {
-                                value = new DataValue(error.statusCode());
+                                value = new DataValue(null, new StatusCode(error.statusCode()),
+                                        new DateTime(raw.receivedAt()), DateTime.now());
                                 recordCodecFailure(nodeId, address, error);
                                 recordLocalFailureSafely(error, "CODEC", nodeId);
                             }
