@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 
 import com.jw.snmpdriver.gateway.device.SNMPDeviceConfig;
 import com.jw.snmpdriver.snmp.address.NumericOid;
@@ -40,6 +41,7 @@ public final class SharedPollCoordinator {
 
     private final SnmpRequestClient requestClient;
     private final ScheduledExecutorService scheduler;
+    private final LongSupplier nanoClock;
     private final Map<String, DeviceState> devices = new ConcurrentHashMap<>();
     private final AtomicLong generationSequence = new AtomicLong();
     private final AtomicBoolean accepting = new AtomicBoolean();
@@ -49,8 +51,17 @@ public final class SharedPollCoordinator {
             SnmpRequestClient requestClient,
             ScheduledExecutorService scheduler
     ) {
+        this(requestClient, scheduler, System::nanoTime);
+    }
+
+    SharedPollCoordinator(
+            SnmpRequestClient requestClient,
+            ScheduledExecutorService scheduler,
+            LongSupplier nanoClock
+    ) {
         this.requestClient = Objects.requireNonNull(requestClient);
         this.scheduler = Objects.requireNonNull(scheduler);
+        this.nanoClock = Objects.requireNonNull(nanoClock);
     }
 
     public void start() {
@@ -105,7 +116,7 @@ public final class SharedPollCoordinator {
                 state.recordFailure("SCHEDULER", null, error);
                 state.entries.values().stream()
                         .filter(PollEntry::hasSubscribers)
-                        .forEach(entry -> entry.publishFailure(error, System.nanoTime()));
+                        .forEach(entry -> entry.publishFailure(error, nanoClock.getAsLong()));
                 if (error instanceof RejectedExecutionException) {
                     state.failQueuedSets(error);
                 } else {
@@ -212,7 +223,7 @@ public final class SharedPollCoordinator {
 
             PollEntry entry = entries.computeIfAbsent(
                     address.oid(),
-                    oid -> new PollEntry(new PollKey(endpoint.deviceId(), oid))
+                    oid -> new PollEntry(new PollKey(endpoint.deviceId(), oid), nanoClock)
             );
             Subscriber subscriber = entry.addSubscriber(intervalMillis, onValue, onFailure);
             try {
@@ -240,7 +251,7 @@ public final class SharedPollCoordinator {
             if (!entry.hasSubscribers()) {
                 entries.remove(oid, entry);
             }
-            scheduleNext(System.nanoTime());
+            scheduleNext(nanoClock.getAsLong());
         }
 
         private synchronized CompletionStage<SetResult> enqueueSet(
@@ -253,14 +264,14 @@ public final class SharedPollCoordinator {
                         new CancellationException("SNMP Device is closed")
                 );
             }
-            if (deadlineNanos <= System.nanoTime()) {
+            if (deadlineNanos <= nanoClock.getAsLong()) {
                 SnmpQueueTimeoutException failure = new SnmpQueueTimeoutException(
                         "SNMP SET queue deadline expired before enqueue"
                 );
                 recordFailure("SET", address.oid(), failure);
                 return CompletableFuture.failedFuture(failure);
             }
-            expireQueuedSets(System.nanoTime());
+            expireQueuedSets(nanoClock.getAsLong());
             if (setQueue.size() >= MAX_PENDING_SETS_PER_DEVICE) {
                 RejectedExecutionException failure = new RejectedExecutionException(
                         "SNMP SET queue capacity exceeded device=" + endpoint.deviceId()
@@ -286,7 +297,7 @@ public final class SharedPollCoordinator {
                     return;
                 }
 
-                long now = System.nanoTime();
+                long now = nanoClock.getAsLong();
                 expireQueuedSets(now);
                 for (PollEntry entry : entries.values()) {
                     entry.publishCachedDue(now);
@@ -340,9 +351,9 @@ public final class SharedPollCoordinator {
                     if (probe) {
                         break;
                     }
-                    now = System.nanoTime();
+                    now = nanoClock.getAsLong();
                 }
-                scheduleNext(System.nanoTime());
+                scheduleNext(nanoClock.getAsLong());
             }
         }
 
@@ -611,7 +622,7 @@ public final class SharedPollCoordinator {
             if (!entry.inFlight) {
                 return;
             }
-            long now = System.nanoTime();
+            long now = nanoClock.getAsLong();
             entry.inFlight = false;
             entry.isolated = false;
             entry.nextDueNanos = saturatedAdd(
@@ -634,7 +645,7 @@ public final class SharedPollCoordinator {
             if (!entry.inFlight) {
                 return;
             }
-            long now = System.nanoTime();
+            long now = nanoClock.getAsLong();
             entry.inFlight = false;
             entry.nextDueNanos = saturatedAdd(
                     now,
@@ -663,7 +674,7 @@ public final class SharedPollCoordinator {
             }
             if (communicationFailureActive) {
                 long durationMillis = TimeUnit.NANOSECONDS.toMillis(
-                        Math.max(0L, System.nanoTime() - communicationFailureStartedNanos)
+                        Math.max(0L, nanoClock.getAsLong() - communicationFailureStartedNanos)
                 );
                 logger.info(
                         "SNMP communication recovered device={} host={} port={} op={} oid={} version={} durationMs={}",
@@ -689,11 +700,11 @@ public final class SharedPollCoordinator {
             lastFailureTime = Instant.now();
             lastError = classified.diagnosticMessage();
             if (classified.circuitFailure() && !communicationFailureActive) {
-                communicationFailureStartedNanos = System.nanoTime();
+                communicationFailureStartedNanos = nanoClock.getAsLong();
                 communicationFailureActive = true;
             }
 
-            long now = System.nanoTime();
+            long now = nanoClock.getAsLong();
             String oidText = oid == null ? "-" : oid.canonical();
             String key = operation + "|" + oidText + "|" + category + "|" + message;
             FailureLogState logState = failureLogs.get(key);
@@ -760,7 +771,7 @@ public final class SharedPollCoordinator {
         ) {
             DeviceCircuitBreaker.State before = breaker.state();
             breaker.onTransportFailure(
-                    System.nanoTime(),
+                    nanoClock.getAsLong(),
                     ThreadLocalRandom.current().nextLong(0L, 501L)
             );
             DeviceCircuitBreaker.State after = breaker.state();
@@ -792,7 +803,7 @@ public final class SharedPollCoordinator {
             recordFailure("SCHEDULER", null, error);
             entries.values().stream()
                     .filter(PollEntry::hasSubscribers)
-                    .forEach(entry -> entry.publishFailure(error, System.nanoTime()));
+                    .forEach(entry -> entry.publishFailure(error, nanoClock.getAsLong()));
             failQueuedSets(error);
         }
 
@@ -933,16 +944,19 @@ public final class SharedPollCoordinator {
 
     private static final class PollEntry {
         private final PollKey key;
+        private final LongSupplier nanoClock;
         private final CopyOnWriteArrayList<Subscriber> subscribers = new CopyOnWriteArrayList<>();
         private long intervalMillis = 1_000L;
-        private long nextDueNanos = System.nanoTime();
+        private long nextDueNanos;
         private boolean inFlight;
         private boolean isolated;
         private RawBinding latestBinding;
         private Throwable latestFailure;
 
-        private PollEntry(PollKey key) {
+        private PollEntry(PollKey key, LongSupplier nanoClock) {
             this.key = key;
+            this.nanoClock = nanoClock;
+            this.nextDueNanos = nanoClock.getAsLong();
         }
 
         private Subscriber addSubscriber(
@@ -953,7 +967,7 @@ public final class SharedPollCoordinator {
             Subscriber subscriber = new Subscriber(intervalMillis, onValue, onFailure);
             subscribers.add(subscriber);
             recomputeInterval();
-            nextDueNanos = Math.min(nextDueNanos, System.nanoTime());
+            nextDueNanos = Math.min(nextDueNanos, nanoClock.getAsLong());
             return subscriber;
         }
 

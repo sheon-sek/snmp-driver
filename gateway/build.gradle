@@ -24,6 +24,7 @@ dependencies {
     modlImplementation project(':web-ui')
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.3'
+    testImplementation "com.inductiveautomation.ignitionsdk:driver-api:${ignitionVersion}"
     testCompileOnly "com.inductiveautomation.ignitionsdk:ignition-common:${ignitionVersion}"
     testCompileOnly "com.inductiveautomation.ignitionsdk:gateway-api:${ignitionVersion}"
     testRuntimeOnly "com.inductiveautomation.ignitionsdk:ignition-common:${ignitionVersion}"
