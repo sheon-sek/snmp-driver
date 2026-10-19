@@ -1,23 +1,23 @@
 package com.jw.snmpdriver.snmp.runtime;
 
 import java.util.List;
-import java.util.PriorityQueue;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.RunnableScheduledFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-/** Single-threaded virtual time; no threads, sockets or wall-clock waiting. */
+/** Caller-controlled virtual time; also accepts scheduling from callback workers. */
 final class ControlledScheduler extends AbstractExecutorService implements ScheduledExecutorService {
-    private final PriorityQueue<Task<?>> tasks = new PriorityQueue<>();
-    private long nowNanos = TimeUnit.SECONDS.toNanos(1);
+    private final PriorityBlockingQueue<Task<?>> tasks = new PriorityBlockingQueue<>();
+    private volatile long nowNanos = TimeUnit.SECONDS.toNanos(1);
     private long sequence;
-    private boolean shutdown;
+    private volatile boolean shutdown;
 
     long nanoTime() {
         return nowNanos;
@@ -47,7 +47,7 @@ final class ControlledScheduler extends AbstractExecutorService implements Sched
     }
 
     @Override
-    public <V> ScheduledFuture<V> schedule(Callable<V> command, long delay, TimeUnit unit) {
+    public synchronized <V> ScheduledFuture<V> schedule(Callable<V> command, long delay, TimeUnit unit) {
         if (shutdown) {
             throw new RejectedExecutionException("Controlled scheduler is shut down");
         }
