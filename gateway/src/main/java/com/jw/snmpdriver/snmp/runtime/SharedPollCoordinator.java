@@ -41,6 +41,8 @@ public final class SharedPollCoordinator {
 
     private final SnmpRequestClient requestClient;
     private final ScheduledExecutorService scheduler;
+    private final CallbackExecutor callbacks;
+    private final boolean ownsCallbacks;
     private final LongSupplier nanoClock;
     private final Map<String, DeviceState> devices = new ConcurrentHashMap<>();
     private final AtomicLong generationSequence = new AtomicLong();
@@ -51,7 +53,7 @@ public final class SharedPollCoordinator {
             SnmpRequestClient requestClient,
             ScheduledExecutorService scheduler
     ) {
-        this(requestClient, scheduler, System::nanoTime);
+        this(requestClient, scheduler, new CallbackExecutor(), System::nanoTime, true);
     }
 
     SharedPollCoordinator(
@@ -59,6 +61,23 @@ public final class SharedPollCoordinator {
             ScheduledExecutorService scheduler,
             LongSupplier nanoClock
     ) {
+        this(requestClient, scheduler, new CallbackExecutor(Runnable::run, 4096), nanoClock, true);
+    }
+
+    public SharedPollCoordinator(SnmpRequestClient requestClient,
+                                 ScheduledExecutorService scheduler, CallbackExecutor callbacks) {
+        this(requestClient, scheduler, callbacks, System::nanoTime, false);
+    }
+
+    SharedPollCoordinator(SnmpRequestClient requestClient, ScheduledExecutorService scheduler,
+                          CallbackExecutor callbacks, LongSupplier nanoClock) {
+        this(requestClient, scheduler, callbacks, nanoClock, false);
+    }
+
+    private SharedPollCoordinator(SnmpRequestClient requestClient, ScheduledExecutorService scheduler,
+                                  CallbackExecutor callbacks, LongSupplier nanoClock, boolean ownsCallbacks) {
+        this.callbacks = Objects.requireNonNull(callbacks);
+        this.ownsCallbacks = ownsCallbacks;
         this.requestClient = Objects.requireNonNull(requestClient);
         this.scheduler = Objects.requireNonNull(scheduler);
         this.nanoClock = Objects.requireNonNull(nanoClock);
@@ -79,6 +98,9 @@ public final class SharedPollCoordinator {
         }
         devices.values().forEach(state -> state.close("runtime shutdown"));
         devices.clear();
+        if (ownsCallbacks) {
+            callbacks.shutdownNow();
+        }
         logger.info("SNMP poll coordinator stopped");
     }
 
@@ -186,6 +208,8 @@ public final class SharedPollCoordinator {
         private final Map<NumericOid, PollEntry> entries = new HashMap<>();
         private final ArrayDeque<SetCommand> setQueue = new ArrayDeque<>();
         private final int maxInflight;
+        private final CallbackExecutor.SerialExecutor deviceSerial = callbacks.serialExecutor();
+        private long callbackRejectedCount;
 
         private ScheduledFuture<?> wakeTask;
         private int inFlight;
@@ -361,16 +385,30 @@ public final class SharedPollCoordinator {
         }
 
         private void dispatchSet(SetCommand command, boolean probe) {
+            CallbackExecutor.Ticket ticket;
+            try {
+                ticket = deviceSerial.reserve(error -> completeSet(command, null, error, probe));
+            } catch (RejectedExecutionException error) {
+                completeSet(command, null, callbackRejected(error), probe);
+                return;
+            }
             try {
                 CompletionStage<SetResult> request =
                         requestClient.set(endpoint, command.address.oid(), command.value);
                 if (request == null) {
                     throw new IllegalStateException("SNMP request client returned a null SET stage");
                 }
-                request.whenComplete((result, error) -> completeSet(command, result, error, probe));
+                request.whenComplete((result, error) ->
+                        ticket.complete(() -> completeSet(command, result, error, probe)));
             } catch (RuntimeException error) {
-                completeSet(command, null, error, probe);
+                ticket.complete(() -> completeSet(command, null, error, probe));
             }
+        }
+
+        private RejectedExecutionException callbackRejected(RejectedExecutionException error) {
+            callbackRejectedCount++;
+            return new RejectedExecutionException("CallbackRejectedCount=" + callbackRejectedCount
+                    + " device=" + endpoint.deviceId() + " SNMP callback admission rejected", error);
         }
 
         private void completeSet(SetCommand command, SetResult result, Throwable error, boolean probe) {
@@ -447,19 +485,36 @@ public final class SharedPollCoordinator {
         }
 
         private CompletionStage<Void> executeBatch(List<PollEntry> batch) {
+            CompletableFuture<Void> completion = new CompletableFuture<>();
+            CallbackExecutor.Ticket ticket;
             try {
-                List<NumericOid> oids =
-                        batch.stream().map(entry -> entry.key.oid()).toList();
+                ticket = deviceSerial.reserve(completion::completeExceptionally);
+            } catch (RejectedExecutionException error) {
+                return CompletableFuture.failedFuture(callbackRejected(error));
+            }
+            try {
+                List<NumericOid> oids = batch.stream().map(entry -> entry.key.oid()).toList();
                 CompletionStage<BatchResult> request = requestClient.getBatch(endpoint, oids);
                 if (request == null) {
-                    return CompletableFuture.failedFuture(new IllegalStateException(
-                            "SNMP request client returned a null GET stage"
-                    ));
+                    throw new IllegalStateException("SNMP request client returned a null GET stage");
                 }
-                return request.thenCompose(result -> processBatchResult(batch, result));
+                request.whenComplete((result, error) -> ticket.complete(() -> {
+                    if (error != null) {
+                        completion.completeExceptionally(error);
+                    } else {
+                        processBatchResult(batch, result).whenComplete((ignored, failure) -> {
+                            if (failure == null) {
+                                completion.complete(null);
+                            } else {
+                                completion.completeExceptionally(failure);
+                            }
+                        });
+                    }
+                }));
             } catch (RuntimeException error) {
-                return CompletableFuture.failedFuture(error);
+                ticket.complete(() -> completion.completeExceptionally(error));
             }
+            return completion;
         }
 
         private CompletionStage<Void> processBatchResult(
@@ -933,11 +988,17 @@ public final class SharedPollCoordinator {
                 return;
             }
             closed = true;
+            deviceSerial.close();
+            inFlight = 0;
             if (wakeTask != null) {
                 wakeTask.cancel(false);
                 wakeTask = null;
             }
             CancellationException cancelled = new CancellationException(reason);
+            if (reason.equals("runtime shutdown")) {
+                entries.values().stream().filter(entry -> entry.inFlight)
+                        .forEach(entry -> entry.publishFailure(cancelled, nanoClock.getAsLong()));
+            }
             setQueue.forEach(command -> command.result.completeExceptionally(cancelled));
             setQueue.clear();
             entries.values().forEach(PollEntry::close);
