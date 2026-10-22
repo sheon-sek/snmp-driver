@@ -7,7 +7,7 @@
 - 行号规则：本文中所有 `file:line` 都是本次亲自打开当前文件后确认的，没有沿用三份旧报告的行号。无法在本地确认的写作「待验证」。
 - 路径缩写：`S/` = `gateway/src/main/java/com/jw/snmpdriver/`；`B/` = `base/src/main/java/com/jw/ignition/`；`J/` = SNMP4J 3.12.2 源码包中的 `org/snmp4j/`（外部源码，不在本仓库内）。其余路径相对 repo root（`/home/sheon/Projects/snmp-driver`，见 Q15）。
 - 契约调查：已纳入 `f99b28d` 的 [M0-S 调查记录](research/M0S_CONTRACT_FINDINGS.md)。静态结论与待实测项目分开记录；本次修订未运行验证。
-- 修订：已回写 grilling 决策 Q1–Q18（§1.1）。术语以 `CONTEXT.md` 为准（Q6）；ADR 以仓库 `docs/adr/` 为权威来源（Q14）。
+- 修订：已回写 grilling 决策 Q1–Q18 与 M1a grilling 决策 Q19–Q23（§1.1）。术语以 `CONTEXT.md` 为准（Q6）；ADR 以仓库 `docs/adr/` 为权威来源（Q14）。
 
 ---
 
@@ -48,6 +48,11 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 | Q15 | 以 Linux 环境为准：repo root /home/sheon/Projects/snmp-driver，命令 ./gradlew。 | §6 |
 | Q16 | worker 长期授权在 repo root 运行 ./gradlew :gateway:test、:base:test、build；igdev Gateway 系统测试、Docker、风暴测试、web-ui 命令需逐次询问用户。 | §5.1、§6 |
 | Q17 | 每里程碑（M0-S、M0、M1a–d）一个 GitHub Issue、一个分支、一个 PR，不直接 commit main；开 Issue/PR 前询问用户；Opus 5.5 high 实现，codex gpt-6.1-sol high 交叉 review，coordinator 统筹验收。 | §5.4 |
+| Q19 | 跨设备冲突以运行期 `registry.acquire` 复查为准；保存期跨设备拒绝不作为 M1a 门槛，另开 spike 验证，不可行则只保留运行期降级。 | §4.8；`docs/adr/0007-cross-device-validation-runtime-first.md` |
+| Q20 | M1a 做真实 bind，不做接收：可注入 `ListenerBinder`、状态机、引用计数、`Traps/Status`、`LastError`、`ListenerEndpoint`；收到的包直接丢弃，responder、队列、`TrapEngineIdentity` 留给 M1b/M1c。`Traps/` 三个节点不论 `trapEnabled` 都创建，关闭时 `Status=Disabled`。 | §4.2、§4.7 |
+| Q21 | bind 失败固定 30 s 重试，不退避，仅在仍有引用时重试；使用 ServiceBundle 现有 scheduler。 | §4.2 |
+| Q22 | 1.0.0 升级兼容：覆写 `decode(JsonElement)`，仅为缺失的 `trap*` 字段补默认值，显式非法值保留交给 `validate`；不使用 `customizeGson`。 | §4.8 |
+| Q23 | listener 以端口为键，第一个 acquirer 的 bindAddress 定义该 listener，bindAddress 不一致的后来者被拒绝并 Degraded；`trapPort` 默认保持 162；表单 Label 与 Linux 端口提示列为 M1a 验收项。 | §4.2、§4.8、§4.10 |
 | Q18 | agent 只更新 Markdown（Feature List、README），另写 docs/USER_MANUAL_1.1.0_CHANGES.md 列出 .docx 手册需改内容，.docx 由人工更新。 | §4.12、§5.1（M1d 交付物） |
 
 ### 1.2 ADR
@@ -60,6 +65,7 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 - `docs/adr/0004-inform-ack-after-in-memory-enqueue.md`：Inform 在进入内存队列后即 ACK（Q9）
 - `docs/adr/0005-trap-port-policy.md`：Trap 端口默认 162，绑定失败只降级 Trap 功能（D4）
 - `docs/adr/0006-defer-mib-parsing.md`：推迟 MIB 解析，未来首选离线字典（D3）
+- `docs/adr/0007-cross-device-validation-runtime-first.md`：跨设备冲突以运行期复查为准（Q19）
 
 知识库中的 ADR 草稿（`draft` / `agent_access: deny`，等待人工审批）只作为副本，各自注明对应的仓库 ADR：
 
@@ -274,7 +280,7 @@ ServiceBundle
 ├── SharedPollCoordinator / Snmp4jRequestClient   （轮询，独立 socket）
 └── TrapListenerRegistry                          （Trap，独立 SNMP4J 栈）
     ├── TrapEngineIdentity   （持久化 engineID/boots，Registry 级唯一，见 4.6）
-    ├── TrapListener[key=(InetAddress bind, port)]
+    ├── TrapListener[key=port；bindAddress 由第一个 acquirer 确定]
     │   ├── DefaultUdpTransportMapping + MessageDispatcherImpl + MPv1/MPv2c/MPv3(隔离 USM)
     │   ├── TrapCommandResponder（监听线程：过滤/限速/去重/入队/ACK）
     │   └── refCount、state(BOUND|FAILED|CLOSED)、lastBindError
@@ -290,7 +296,7 @@ SNMPDevice
   - 设备 `onStartup`（`trapEnabled` 为真）时 `acquire`，`onShutdown` 与 `cleanupAfterStartupFailure` 时 `release`。设备重配置时先 release 后 acquire，在同一个 listener 锁内串行执行，避免 rebind 竞争。
   - 模块 shutdown 时调用 `registry.closeAll()`。
 - **绑定失败**：listener 进入 `FAILED`，记录原因；持有它的设备 `Traps/Status=Degraded`，`Traps/LastError` 按 §4.10 的文案填写。设备主 `Status` 与轮询**不受影响**（D4）。只要还有引用，registry 每 30 s 重试 bind 一次，这样在 Windows 上停掉 SNMP Trap 服务后无需重启就能恢复。
-- **listener 键规范化**：bind 地址只接受 IP 字面量（不做 DNS），解析为 `InetAddress` 后与端口一起作为键。`0.0.0.0`、具体 IPv4、`::`（可能是双栈）在同一端口上会互相覆盖，所以保存时规定：**同一端口上所有设备的 bindAddress 必须完全相同**，否则报错（§4.8）。
+- **listener 键规范化**：bind 地址只接受 IP 字面量（不做 DNS），解析为 `InetAddress` 后与端口一起作为键。`0.0.0.0`、具体 IPv4、`::`（可能是双栈）在同一端口上会互相覆盖，所以保存时规定：**同一端口上所有设备的 bindAddress 必须完全相同**。保存期拒绝见 Q19；运行期 `acquire` 以端口为键，bindAddress 不一致的后来者被拒绝，该设备 `Traps/Status=Degraded`，LastError 写明冲突的 Device 与地址（Q23）。
 
 ### 4.3 设备路由与过滤
 
@@ -408,7 +414,7 @@ Notification 只归属已配置的 Device，不提供 Gateway 级「接收任意
 **保存时校验**（`SNMPDeviceExtensionPoint.validate`，现有代码 `:75-117`）：
 
 - 单设备：端口范围、IP 字面量、engineID hex 格式与长度、allowlist 语法、限速范围；`trapSecurity=USM` 时要求设备 version 为 V3；COMMUNITY 模式下 trapCommunity 与 readCommunity 至少有一个。
-- 跨设备（D4）：同一端口上 bindAddress 必须完全相同；同一 listener 上同名 USM securityName 必须使用相同的 SecretConfig 引用和协议。ServiceBundle 只保存运行时 Device，不是包含禁用或创建失败设备的完整配置集合。M1a 前需确定可识别当前资源的配置快照/资源层入口，避免编辑自身误报、递归解码，并覆盖禁用资源、并发保存和批量导入；完整保存期拒绝仍是 D4 要求，入口未解决前不宣布 M1a 可实施；`registry.acquire` 运行期再做一次相同检查，冲突的设备 `Traps/Status=Degraded`，LastError 写明冲突的对象。
+- 跨设备（D4）：同一端口上 bindAddress 必须完全相同；同一 listener 上同名 USM securityName 必须使用相同的 SecretConfig 引用和协议。ServiceBundle 只保存运行时 Device，不是包含禁用或创建失败设备的完整配置集合。保存期跨设备拒绝需要可识别当前资源的配置快照/资源层入口（避免编辑自身误报、递归解码，覆盖禁用资源、并发保存和批量导入），该入口由独立 spike 验证，不再是 M1a 的前置条件，见 Q19 与 ADR 0007；`registry.acquire` 运行期再做一次相同检查，冲突的设备 `Traps/Status=Degraded`，LastError 写明冲突的对象。
 
 ### 4.9 License 行为（Q5）
 

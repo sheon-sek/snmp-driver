@@ -25,8 +25,12 @@ _Avoid_: notification（特指时）
 _Avoid_: acknowledged trap
 
 **Trap Listener**:
-一个 bind 地址加端口上的 Notification 接收端点，可被多个 Device 共享。
+一个端口上的 Notification 接收端点，可被多个 Device 共享；由先启用的 Device 确定 bind 地址，bind 地址不同的 Device 不能共用同一端口。
 _Avoid_: trap receiver、trap server
+
+**Trap Status**:
+Device 上 Trap 功能的状态：Disabled、Listening、Degraded（含 bind 失败与配置冲突）、Unlicensed。只影响 Trap，不影响轮询。
+_Avoid_: listener health
 
 **Unmatched Notification**:
 源地址不属于任何 Device 的 Notification；只计数，不归属任何 Device。
