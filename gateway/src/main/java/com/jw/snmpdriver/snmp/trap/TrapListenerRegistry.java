@@ -19,6 +19,7 @@ import java.util.function.Supplier;
 /** Gateway-wide Trap Listeners keyed by port; the first acquirer's bindAddress defines the listener. */
 public final class TrapListenerRegistry {
     static final long RETRY_SECONDS = 30;
+    static final long SOURCE_REFRESH_MINUTES = 5;
 
     private final ListenerBinder binder;
     private final ScheduledExecutorService scheduler;
@@ -45,8 +46,13 @@ public final class TrapListenerRegistry {
     }
 
     /** {@code onChange} runs after a background bind retry settles, until the handle is released. */
+    public TrapListenerHandle acquire(String deviceName, String bindAddress, int port, Runnable onChange) {
+        return acquire(deviceName, bindAddress, port, onChange, null);
+    }
+
+    /** A non-null {@code recipient} also receives the Notifications whose source belongs to it. */
     public synchronized TrapListenerHandle acquire(
-            String deviceName, String bindAddress, int port, Runnable onChange) {
+            String deviceName, String bindAddress, int port, Runnable onChange, TrapRecipient recipient) {
         InetAddress address = parseIpLiteral(bindAddress);
         if (address == null) {
             return rejected("设备 " + deviceName + " 的 Trap bindAddress \"" + bindAddress + "\" 不是 IP 字面量");
@@ -66,7 +72,12 @@ public final class TrapListenerRegistry {
         if (onChange != null) {
             listener.watchers.add(onChange);
         }
-        return new TrapListenerHandle(this, listener, null, deviceName, onChange);
+        ScheduledFuture<?> refresh = null;
+        if (recipient != null) {
+            listener.router.add(recipient);
+            refresh = scheduleSourceRefresh(recipient);
+        }
+        return new TrapListenerHandle(this, listener, null, deviceName, onChange, recipient, refresh);
     }
 
     public synchronized void closeAll() {
@@ -76,7 +87,14 @@ public final class TrapListenerRegistry {
         listeners.clear();
     }
 
-    synchronized void release(Listener listener, String deviceName, Runnable onChange) {
+    synchronized void release(Listener listener, String deviceName, Runnable onChange,
+                              TrapRecipient recipient, ScheduledFuture<?> refresh) {
+        if (refresh != null) {
+            refresh.cancel(false);
+        }
+        if (recipient != null) {
+            listener.router.remove(recipient);
+        }
         listener.holders.remove(deviceName);
         if (onChange != null) {
             listener.watchers.remove(onChange);
@@ -97,14 +115,38 @@ public final class TrapListenerRegistry {
     }
 
     private TrapListenerHandle rejected(String reason) {
-        return new TrapListenerHandle(this, null, reason, null, null);
+        return new TrapListenerHandle(this, null, reason, null, null, null, null);
+    }
+
+    /** Host DNS is re-resolved off the transport thread; the first run happens immediately. */
+    private ScheduledFuture<?> scheduleSourceRefresh(TrapRecipient recipient) {
+        Runnable refresh = () -> {
+            TrapFilter filter = recipient.filter();
+            filter.refreshSources();
+            if (filter.resolveError() != null) {
+                recipient.notice().accept(filter.resolveError());
+            }
+        };
+        try {
+            return scheduler.scheduleWithFixedDelay(refresh, 0, SOURCE_REFRESH_MINUTES, TimeUnit.MINUTES);
+        } catch (RejectedExecutionException error) {
+            return null;
+        }
+    }
+
+    synchronized long unmatchedCountOf(Listener listener) {
+        return listener.router.unmatchedCount();
+    }
+
+    synchronized long multiMatchCountOf(Listener listener) {
+        return listener.router.multiMatchCount();
     }
 
     private void tryBind(Listener listener) {
         Closeable bound = null;
         Exception failure = null;
         try {
-            bound = binder.bind(listener.address, listener.port);
+            bound = binder.bind(listener.address, listener.port, listener.router);
         } catch (IOException | RuntimeException error) {
             failure = error;
         }
@@ -146,7 +188,7 @@ public final class TrapListenerRegistry {
         Closeable bound = null;
         Exception failure = null;
         try {
-            bound = binder.bind(listener.address, listener.port);
+            bound = binder.bind(listener.address, listener.port, listener.router);
         } catch (IOException | RuntimeException error) {
             failure = error;
         }
@@ -217,10 +259,12 @@ public final class TrapListenerRegistry {
         Closeable bound;
         ScheduledFuture<?> retry;
         final List<Runnable> watchers = new ArrayList<>();
+        final NotificationRouter router;
 
         Listener(int port, InetAddress address) {
             this.port = port;
             this.address = address;
+            this.router = new NotificationRouter(port);
         }
 
         String endpoint() {

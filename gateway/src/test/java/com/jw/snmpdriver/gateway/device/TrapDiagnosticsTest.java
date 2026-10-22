@@ -49,6 +49,23 @@ class TrapDiagnosticsTest {
     }
 
     @Test
+    void noticeShowsInLastErrorOnlyWhileListeningAndIsClearedByRefresh() {
+        diagnostics.notice("ignored before tracking");
+        assertEquals(null, nodes.get("LastError"));
+
+        diagnostics.track(registry().acquire("dev-a", "0.0.0.0", 10162, diagnostics::refresh));
+        diagnostics.notice("community 不匹配");
+        assertEquals("community 不匹配", nodes.get("LastError"));
+
+        nodes.put("LastError", "kept");
+        diagnostics.notice("community 不匹配");
+        assertEquals("kept", nodes.get("LastError"), "an unchanged notice must not rewrite the node");
+
+        diagnostics.refresh();
+        assertEquals("", nodes.get("LastError"));
+    }
+
+    @Test
     void boundListenerShowsListeningAndEndpoint() {
         TrapListenerHandle handle = registry().acquire("dev-a", "0.0.0.0", 10162, diagnostics::refresh);
 

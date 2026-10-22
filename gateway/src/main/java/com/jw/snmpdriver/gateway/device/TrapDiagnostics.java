@@ -6,6 +6,7 @@ import java.util.function.BiConsumer;
 
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
+import com.jw.snmpdriver.snmp.trap.TrapListenerState;
 import org.eclipse.milo.opcua.sdk.core.AccessLevel;
 import org.eclipse.milo.opcua.sdk.core.ValueRanks;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaFolderNode;
@@ -55,6 +56,7 @@ public final class TrapDiagnostics {
     private final BiConsumer<String, String> sink;
     private TrapListenerHandle handle;
     private boolean nodesCreated;
+    private String lastNotice;
     private NodeWriter writer;
 
     TrapDiagnostics(BiConsumer<String, String> sink) {
@@ -116,7 +118,21 @@ public final class TrapDiagnostics {
         }
     }
 
+    /**
+     * Operator-facing hint from the receive path (auth failure, DNS refresh failure). It only shows while
+     * Listening and only when the text changes, so a flood of bad packets writes the node once.
+     */
+    public synchronized void notice(String message) {
+        if (handle == null || handle.isRejected() || handle.state() != TrapListenerState.BOUND
+                || message.equals(lastNotice)) {
+            return;
+        }
+        lastNotice = message;
+        sink.accept(LAST_ERROR, message);
+    }
+
     private void publish(Status status, String error, String endpoint) {
+        lastNotice = null;
         sink.accept(STATUS, status.text);
         sink.accept(LAST_ERROR, error);
         sink.accept(LISTENER_ENDPOINT, endpoint);

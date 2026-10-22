@@ -1,5 +1,7 @@
 package com.jw.snmpdriver.gateway.device;
 
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -20,8 +22,11 @@ import com.jw.snmpdriver.snmp.runtime.SnmpEndpoint;
 import com.jw.snmpdriver.snmp.runtime.SnmpFailureClassifier;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueCodec;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueException;
+import com.jw.snmpdriver.snmp.trap.TrapCounters;
+import com.jw.snmpdriver.snmp.trap.TrapFilter;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
 import com.jw.snmpdriver.snmp.trap.TrapListenerRegistry;
+import com.jw.snmpdriver.snmp.trap.TrapRecipient;
 import org.eclipse.milo.opcua.sdk.core.Reference;
 import org.eclipse.milo.opcua.sdk.server.AddressSpace.ReadContext;
 import org.eclipse.milo.opcua.sdk.server.AddressSpace.RevisedDataItemParameters;
@@ -388,16 +393,29 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             }
             TrapListenerHandle handle = registry.get().acquire(
                     context.getName(), config.trapBindAddress(), config.trapPort(),
-                    trapDiagnostics::refresh);
+                    trapDiagnostics::refresh, createTrapRecipient());
             trapHandle = handle;
             trapDiagnostics.track(handle);
-        } catch (RuntimeException error) {
+        } catch (RuntimeException | SecretException error) {
             logger.warn(
                     "Failed to acquire Trap listener device={} bindAddress={} port={} category=trap",
                     context.getName(), config.trapBindAddress(), config.trapPort(), error
             );
             trapDiagnostics.showUnavailable("获取 Trap 监听器失败：" + error);
         }
+    }
+
+    /** COMMUNITY mode only (M1b); the Trap Community falls back to the Read Community when empty. */
+    private TrapRecipient createTrapRecipient() throws SecretException {
+        String community = secret(config.trapCommunity());
+        if (community.isBlank()) {
+            community = secret(config.readCommunity());
+        }
+        TrapFilter filter = new TrapFilter(config.host(), config.trapSourceAllowlist(),
+                community.getBytes(StandardCharsets.UTF_8), InetAddress::getAllByName);
+        // the admission queue that consumes accepted Notifications arrives with #26
+        return new TrapRecipient(context.getName(), filter, new TrapCounters(),
+                notification -> { }, trapDiagnostics::notice);
     }
 
     private void releaseTrapListener() {
