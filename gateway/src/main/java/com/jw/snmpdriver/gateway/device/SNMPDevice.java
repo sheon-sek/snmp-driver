@@ -5,6 +5,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import com.inductiveautomation.ignition.gateway.opcua.server.api.Device;
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
@@ -59,22 +61,36 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     private final SubscriptionModel subscriptionModel;
     private final DeviceDiagnostics diagnostics;
     private final TrapDiagnostics trapDiagnostics;
+    private final TrapCounters trapCounters = new TrapCounters();
+    private final SecretResolver secrets;
 
     private final DeviceStatusMachine statusMachine = new DeviceStatusMachine(this::publishStatus);
     private volatile DevicePollHandle pollHandle;
     private volatile TrapListenerHandle trapHandle;
+    private volatile ScheduledFuture<?> counterFlush;
     private volatile SubscriptionBridge subscriptionBridge;
     private volatile DynamicAttributeReader attributeReader;
     private volatile DynamicAttributeWriter attributeWriter;
 
+    /** Test seam: lets a fake Gateway supply the plaintext of a SecretConfig. */
+    @FunctionalInterface
+    interface SecretResolver {
+        String resolve(SecretConfig secretConfig) throws SecretException;
+    }
+
     public SNMPDevice(DeviceContext context, SNMPDeviceConfig config, ServiceBundle services) {
+        this(context, config, services, null);
+    }
+
+    SNMPDevice(DeviceContext context, SNMPDeviceConfig config, ServiceBundle services, SecretResolver secrets) {
         super(context.getServer());
+        this.secrets = secrets;
         this.context = context;
         this.config = config;
         this.services = services;
         this.subscriptionModel = new SubscriptionModel(context.getServer(), this);
         this.diagnostics = new DeviceDiagnostics(this, context);
-        this.trapDiagnostics = TrapDiagnostics.forNodes(this, context, services::licenseVerdict);
+        this.trapDiagnostics = TrapDiagnostics.forNodes(this, context, services::licenseVerdict, trapCounters);
 
         getLifecycleManager().addLifecycle(subscriptionModel);
         getLifecycleManager().addStartupTask(this::onStartup);
@@ -397,6 +413,8 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                     trapDiagnostics::refresh, createTrapRecipient());
             trapHandle = handle;
             trapDiagnostics.track(handle);
+            counterFlush = services.scheduler().scheduleWithFixedDelay(
+                    trapDiagnostics::flushCounters, 1, 1, TimeUnit.SECONDS);
         } catch (RuntimeException | SecretException error) {
             logger.warn(
                     "Failed to acquire Trap listener device={} bindAddress={} port={} category=trap",
@@ -414,13 +432,17 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         }
         TrapFilter filter = new TrapFilter(config.host(), config.trapSourceAllowlist(),
                 community.getBytes(StandardCharsets.UTF_8), InetAddress::getAllByName);
-        // nothing consumes accepted Notifications until the Traps/Last nodes land (#28)
-        return new TrapRecipient(context.getName(), filter, new TrapCounters(),
-                new TokenBucket(config.trapRateLimitPerSecond()), notification -> { }, trapDiagnostics::notice,
+        return new TrapRecipient(context.getName(), filter, trapCounters,
+                new TokenBucket(config.trapRateLimitPerSecond()), trapDiagnostics::accept, trapDiagnostics::notice,
                 config.trapAcceptInform());
     }
 
     private void releaseTrapListener() {
+        ScheduledFuture<?> flush = counterFlush;
+        counterFlush = null;
+        if (flush != null) {
+            flush.cancel(false);
+        }
         TrapListenerHandle handle = trapHandle;
         trapHandle = null;
         if (handle != null) {
@@ -542,6 +564,9 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     }
 
     private String secret(SecretConfig secretConfig) throws SecretException {
+        if (secrets != null) {
+            return secrets.resolve(secretConfig);
+        }
         if (secretConfig == null) {
             return "";
         }
