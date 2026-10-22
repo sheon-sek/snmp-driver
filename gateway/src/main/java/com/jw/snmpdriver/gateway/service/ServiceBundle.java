@@ -21,6 +21,8 @@ import com.jw.snmpdriver.snmp.runtime.LicensedSnmpRequestClient;
 import com.jw.snmpdriver.snmp.runtime.SharedPollCoordinator;
 import com.jw.snmpdriver.snmp.runtime.Snmp4jRequestClient;
 import com.jw.snmpdriver.snmp.runtime.SnmpRequestClient;
+import com.jw.snmpdriver.snmp.trap.Snmp4jListenerBinder;
+import com.jw.snmpdriver.snmp.trap.TrapListenerRegistry;
 
 public final class ServiceBundle extends AbstractBundle {
     private static final AtomicInteger POLL_THREAD_ID = new AtomicInteger();
@@ -35,6 +37,7 @@ public final class ServiceBundle extends AbstractBundle {
     private ScheduledExecutorService scheduler;
     private SharedPollCoordinator runtime;
     private CallbackExecutor callbacks;
+    private TrapListenerRegistry trapRegistry;
 
     @Override
     protected synchronized void setupProcess(GatewayContext context) {
@@ -118,6 +121,10 @@ public final class ServiceBundle extends AbstractBundle {
             runtime = new SharedPollCoordinator(requestClient, scheduler, callbacks);
             requestClient.start();
             runtime.start();
+            trapRegistry = TrapListenerRegistry.tryCreate(
+                    () -> new TrapListenerRegistry(new Snmp4jListenerBinder(), scheduler),
+                    error -> logger.error("Failed to create Trap listener registry; Trap is unavailable", error)
+            );
             state = State.RUNNING;
             logger.info("Shared SNMP runtime started");
             return runtime;
@@ -155,6 +162,11 @@ public final class ServiceBundle extends AbstractBundle {
         return ensureStarted();
     }
 
+    /** Null when the registry could not be created; Trap then stays unavailable while polling runs. */
+    public synchronized Optional<TrapListenerRegistry> trapRegistry() {
+        return Optional.ofNullable(trapRegistry);
+    }
+
     public ModuleLicenseRuntime license() {
         return Objects.requireNonNull(license, "ServiceBundle is not set up");
     }
@@ -175,6 +187,13 @@ public final class ServiceBundle extends AbstractBundle {
     }
 
     private void closeRuntimeParts() {
+        if (trapRegistry != null) {
+            try {
+                trapRegistry.closeAll();
+            } catch (RuntimeException error) {
+                logger.warn("Failed to close Trap listeners cleanly", error);
+            }
+        }
         if (runtime != null) {
             try {
                 runtime.stop();
@@ -216,6 +235,7 @@ public final class ServiceBundle extends AbstractBundle {
                 logger.warn("Failed to stop SNMP scheduler cleanly", error);
             }
         }
+        trapRegistry = null;
         runtime = null;
         callbacks = null;
         requestClient = null;

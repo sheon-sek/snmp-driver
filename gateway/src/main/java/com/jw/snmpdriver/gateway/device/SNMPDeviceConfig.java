@@ -47,7 +47,30 @@ public record SNMPDeviceConfig(
         @FormCategory("RUNTIME") @Label("Max Request Bytes*") @FormField(FormFieldType.NUMBER)
         @DefaultValue("1200") @Required int maxRequestBytes,
         @FormCategory("RUNTIME") @Label("Max In-flight Requests*") @FormField(FormFieldType.NUMBER)
-        @DefaultValue("2") @Required int maxInflightPerDevice
+        @DefaultValue("2") @Required int maxInflightPerDevice,
+        @FormCategory("TRAP") @Label("Trap Enabled (SNMP Trap/Inform receiver)") @FormField(FormFieldType.CHECKBOX)
+        @DefaultValue("false") @Required boolean trapEnabled,
+        @FormCategory("TRAP") @Label("Trap Bind Address* (IP literal; first device on a port decides the listener)")
+        @FormField(FormFieldType.TEXT)
+        @DefaultValue("0.0.0.0") @Required String trapBindAddress,
+        @FormCategory("TRAP") @Label("Trap Port* (Linux: use 10162 and redirect UDP 162 with nftables)")
+        @FormField(FormFieldType.NUMBER)
+        @DefaultValue("162") @Required int trapPort,
+        @FormCategory("TRAP") @Label("Trap Security* (USM requires SNMP Version V3)") @FormField(FormFieldType.SELECT)
+        @DefaultValue("COMMUNITY") @Required TrapSecurity trapSecurity,
+        @FormCategory("TRAP") @Label("Trap Community (COMMUNITY mode; empty uses Read Community)")
+        @FormField(FormFieldType.SECRET)
+        @DefaultValue("null") @IsNullable SecretConfig trapCommunity,
+        @FormCategory("TRAP") @Label("Trap Sender Engine ID (V3 only; hex, 5-32 bytes; required to receive V3 Traps)")
+        @FormField(FormFieldType.TEXT)
+        @DefaultValue("") String trapSenderEngineId,
+        @FormCategory("TRAP") @Label("Accept Inform") @FormField(FormFieldType.CHECKBOX)
+        @DefaultValue("true") @Required boolean trapAcceptInform,
+        @FormCategory("TRAP") @Label("Trap Source Allowlist (comma-separated IP or CIDR)")
+        @FormField(FormFieldType.TEXT)
+        @DefaultValue("") String trapSourceAllowlist,
+        @FormCategory("TRAP") @Label("Trap Rate Limit per Second* (1-10000)") @FormField(FormFieldType.NUMBER)
+        @DefaultValue("100") @Required int trapRateLimitPerSecond
 ) {
     public enum Version { V1, V2C, V3 }
     public enum IpFamily { AUTO, IPV4, IPV6 }
@@ -55,13 +78,15 @@ public record SNMPDeviceConfig(
     public enum AuthProtocol { MD5, SHA1, SHA224, SHA256, SHA384, SHA512 }
     public enum PrivacyProtocol { DES, AES128, AES192, AES256 }
     public enum AccessMode { READ_ONLY, READ_WRITE }
+    public enum TrapSecurity { COMMUNITY, USM }
 
     public static SNMPDeviceConfig defaults() {
         return new SNMPDeviceConfig(
                 "", 161, IpFamily.AUTO, Version.V3, null, null, "",
                 SecurityLevel.AUTH_PRIV, AuthProtocol.SHA256, null,
                 PrivacyProtocol.AES128, null, "", AccessMode.READ_ONLY,
-                2_000L, 1, 25, 1_200, 2
+                2_000L, 1, 25, 1_200, 2,
+                false, "0.0.0.0", 162, TrapSecurity.COMMUNITY, null, "", true, "", 100
         );
     }
 }
