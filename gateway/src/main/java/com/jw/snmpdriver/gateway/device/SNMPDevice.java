@@ -22,6 +22,7 @@ import com.jw.snmpdriver.snmp.runtime.SnmpEndpoint;
 import com.jw.snmpdriver.snmp.runtime.SnmpFailureClassifier;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueCodec;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueException;
+import com.jw.snmpdriver.snmp.trap.TokenBucket;
 import com.jw.snmpdriver.snmp.trap.TrapCounters;
 import com.jw.snmpdriver.snmp.trap.TrapFilter;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
@@ -73,7 +74,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         this.services = services;
         this.subscriptionModel = new SubscriptionModel(context.getServer(), this);
         this.diagnostics = new DeviceDiagnostics(this, context);
-        this.trapDiagnostics = TrapDiagnostics.forNodes(this, context);
+        this.trapDiagnostics = TrapDiagnostics.forNodes(this, context, services::licenseVerdict);
 
         getLifecycleManager().addLifecycle(subscriptionModel);
         getLifecycleManager().addStartupTask(this::onStartup);
@@ -413,9 +414,9 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         }
         TrapFilter filter = new TrapFilter(config.host(), config.trapSourceAllowlist(),
                 community.getBytes(StandardCharsets.UTF_8), InetAddress::getAllByName);
-        // the admission queue that consumes accepted Notifications arrives with #26
+        // nothing consumes accepted Notifications until the Traps/Last nodes land (#28)
         return new TrapRecipient(context.getName(), filter, new TrapCounters(),
-                notification -> { }, trapDiagnostics::notice);
+                new TokenBucket(config.trapRateLimitPerSecond()), notification -> { }, trapDiagnostics::notice);
     }
 
     private void releaseTrapListener() {

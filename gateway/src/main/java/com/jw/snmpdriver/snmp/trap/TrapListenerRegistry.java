@@ -16,18 +16,39 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import com.jw.snmpdriver.snmp.runtime.LicenseGate;
+
 /** Gateway-wide Trap Listeners keyed by port; the first acquirer's bindAddress defines the listener. */
 public final class TrapListenerRegistry {
     static final long RETRY_SECONDS = 30;
     static final long SOURCE_REFRESH_MINUTES = 5;
+    static final long LICENSE_WATCH_SECONDS = 10;
 
     private final ListenerBinder binder;
     private final ScheduledExecutorService scheduler;
+    private final Supplier<LicenseGate.Verdict> license;
+    private final boolean watchLicense;
     private final Map<Integer, Listener> listeners = new HashMap<>();
+    private LicenseGate.Verdict lastVerdict;
+    private ScheduledFuture<?> licenseWatch;
 
+    /** Treats every Notification as licensed and never polls the License; for tests and bind-only use. */
     public TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler) {
+        this(binder, scheduler, () -> LicenseGate.Verdict.LICENSED, false);
+    }
+
+    /** {@code license} is polled every {@value #LICENSE_WATCH_SECONDS} s so Traps/Status follows License changes. */
+    public TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler,
+                                Supplier<LicenseGate.Verdict> license) {
+        this(binder, scheduler, license, true);
+    }
+
+    private TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler,
+                                 Supplier<LicenseGate.Verdict> license, boolean watchLicense) {
         this.binder = Objects.requireNonNull(binder);
         this.scheduler = Objects.requireNonNull(scheduler);
+        this.license = Objects.requireNonNull(license);
+        this.watchLicense = watchLicense;
     }
 
     /** Startup guard: a failing factory yields null instead of failing the caller. */
@@ -59,8 +80,10 @@ public final class TrapListenerRegistry {
         }
         Listener listener = listeners.get(port);
         if (listener == null) {
-            listener = new Listener(port, address);
+            listener = new Listener(port, address, license);
             listeners.put(port, listener);
+            listener.router.start();
+            startLicenseWatch();
             tryBind(listener);
         } else if (!listener.address.equals(address)) {
             return rejected("端口 " + port + " 已由设备 " + listener.holders.get(0) + " 以 "
@@ -83,10 +106,49 @@ public final class TrapListenerRegistry {
     }
 
     public synchronized void closeAll() {
+        if (licenseWatch != null) {
+            licenseWatch.cancel(false);
+            licenseWatch = null;
+        }
         for (Listener listener : new ArrayList<>(listeners.values())) {
             close(listener);
         }
         listeners.clear();
+    }
+
+    private void startLicenseWatch() {
+        if (!watchLicense || licenseWatch != null) {
+            return;
+        }
+        lastVerdict = license.get();
+        try {
+            licenseWatch = scheduler.scheduleWithFixedDelay(
+                    this::checkLicense, LICENSE_WATCH_SECONDS, LICENSE_WATCH_SECONDS, TimeUnit.SECONDS);
+        } catch (RejectedExecutionException error) {
+            licenseWatch = null;
+        }
+    }
+
+    /** Tells every Device's diagnostics when the License flips, even if no packet arrives. */
+    private void checkLicense() {
+        LicenseGate.Verdict verdict = license.get();
+        List<Runnable> watchers = new ArrayList<>();
+        synchronized (this) {
+            if (verdict == lastVerdict) {
+                return;
+            }
+            lastVerdict = verdict;
+            for (Listener listener : listeners.values()) {
+                watchers.addAll(listener.watchers);
+            }
+        }
+        for (Runnable watcher : watchers) {
+            try {
+                watcher.run();
+            } catch (RuntimeException ignored) {
+                // a failing watcher must not stop the others
+            }
+        }
     }
 
     synchronized void release(Listener listener, String deviceName, Runnable onChange,
@@ -233,6 +295,7 @@ public final class TrapListenerRegistry {
         }
         listener.refreshes.clear();
         listener.router.clear();
+        listener.router.close();
         if (listener.retry != null) {
             listener.retry.cancel(false);
             listener.retry = null;
@@ -272,10 +335,10 @@ public final class TrapListenerRegistry {
         final NotificationRouter router;
         final Map<TrapRecipient, ScheduledFuture<?>> refreshes = new HashMap<>();
 
-        Listener(int port, InetAddress address) {
+        Listener(int port, InetAddress address, Supplier<LicenseGate.Verdict> license) {
             this.port = port;
             this.address = address;
-            this.router = new NotificationRouter(port);
+            this.router = new NotificationRouter(port, license);
         }
 
         String endpoint() {

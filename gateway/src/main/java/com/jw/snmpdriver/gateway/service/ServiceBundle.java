@@ -17,6 +17,7 @@ import com.jw.ignition.common.service.AbstractBundle;
 import com.jw.snmpdriver.common.ModuleConstants;
 import com.jw.snmpdriver.snmp.runtime.CallbackExecutor;
 import com.jw.snmpdriver.snmp.runtime.DnsResolver;
+import com.jw.snmpdriver.snmp.runtime.LicenseGate;
 import com.jw.snmpdriver.snmp.runtime.LicensedSnmpRequestClient;
 import com.jw.snmpdriver.snmp.runtime.SharedPollCoordinator;
 import com.jw.snmpdriver.snmp.runtime.Snmp4jRequestClient;
@@ -32,6 +33,7 @@ public final class ServiceBundle extends AbstractBundle {
     private State state = State.NEW;
     private GatewayContext context;
     private ModuleLicenseRuntime license;
+    private volatile LicenseGate licenseGate;
     private DnsResolver dnsResolver;
     private SnmpRequestClient requestClient;
     private ScheduledExecutorService scheduler;
@@ -105,9 +107,10 @@ public final class ServiceBundle extends AbstractBundle {
         state = State.STARTING;
         try {
             dnsResolver = new DnsResolver();
+            licenseGate = new LicenseGate(license());
             requestClient = new LicensedSnmpRequestClient(
                     new Snmp4jRequestClient(dnsResolver),
-                    license()
+                    licenseGate
             );
             scheduler = Executors.newScheduledThreadPool(2, runnable -> {
                 Thread thread = new Thread(
@@ -122,7 +125,7 @@ public final class ServiceBundle extends AbstractBundle {
             requestClient.start();
             runtime.start();
             trapRegistry = TrapListenerRegistry.tryCreate(
-                    () -> new TrapListenerRegistry(new Snmp4jListenerBinder(), scheduler),
+                    () -> new TrapListenerRegistry(new Snmp4jListenerBinder(), scheduler, licenseGate::check),
                     error -> logger.error("Failed to create Trap listener registry; Trap is unavailable", error)
             );
             state = State.RUNNING;
@@ -165,6 +168,15 @@ public final class ServiceBundle extends AbstractBundle {
     /** Null when the registry could not be created; Trap then stays unavailable while polling runs. */
     public synchronized Optional<TrapListenerRegistry> trapRegistry() {
         return Optional.ofNullable(trapRegistry);
+    }
+
+    /**
+     * Not licensed when the services are not running. Deliberately lock-free: Trap diagnostics call it
+     * while stop() may hold this bundle's lock and wait for a transport thread.
+     */
+    public LicenseGate.Verdict licenseVerdict() {
+        LicenseGate gate = licenseGate;
+        return gate == null ? LicenseGate.Verdict.NOT_AVAILABLE : gate.check();
     }
 
     public ModuleLicenseRuntime license() {

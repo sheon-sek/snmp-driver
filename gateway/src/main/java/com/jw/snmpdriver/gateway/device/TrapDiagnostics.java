@@ -3,8 +3,10 @@ package com.jw.snmpdriver.gateway.device;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
+import com.jw.snmpdriver.snmp.runtime.LicenseGate;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
 import com.jw.snmpdriver.snmp.trap.TrapListenerState;
 import org.eclipse.milo.opcua.sdk.core.AccessLevel;
@@ -40,7 +42,8 @@ public final class TrapDiagnostics {
     private enum Status {
         DISABLED("Disabled"),
         LISTENING("Listening"),
-        DEGRADED("Degraded");
+        DEGRADED("Degraded"),
+        UNLICENSED("Unlicensed");
 
         private final String text;
 
@@ -53,20 +56,33 @@ public final class TrapDiagnostics {
         return "SNMP Device Trap diagnostic: " + name + "。" + M1A_NOTE;
     }
 
+    private static final String UNLICENSED_NOTE = "SNMP Driver 许可证无效，端口仍在监听但收到的 Notification 被丢弃，"
+            + "不更新 Traps 数据；许可证恢复后自动接收，无需重启。";
+
+    private static final String EXPIRED_NOTE = "SNMP Driver 许可证已过期，端口仍在监听但收到的 Notification 被丢弃，"
+            + "不更新 Traps 数据；续期后自动接收，无需重启。";
+
     private final BiConsumer<String, String> sink;
+    private final Supplier<LicenseGate.Verdict> license;
     private TrapListenerHandle handle;
     private boolean nodesCreated;
     private String lastNotice;
     private NodeWriter writer;
 
     TrapDiagnostics(BiConsumer<String, String> sink) {
+        this(sink, () -> LicenseGate.Verdict.LICENSED);
+    }
+
+    TrapDiagnostics(BiConsumer<String, String> sink, Supplier<LicenseGate.Verdict> license) {
         this.sink = sink;
+        this.license = license;
     }
 
     /** Writes to variable nodes created by {@link #createUnder}. */
-    public static TrapDiagnostics forNodes(SNMPDevice addressSpace, DeviceContext context) {
+    public static TrapDiagnostics forNodes(SNMPDevice addressSpace, DeviceContext context,
+                                           Supplier<LicenseGate.Verdict> license) {
         NodeWriter writer = new NodeWriter(addressSpace, context);
-        TrapDiagnostics diagnostics = new TrapDiagnostics(writer::set);
+        TrapDiagnostics diagnostics = new TrapDiagnostics(writer::set, license);
         diagnostics.writer = writer;
         return diagnostics;
     }
@@ -112,7 +128,16 @@ public final class TrapDiagnostics {
         }
         String endpoint = current.endpoint() == null ? "" : current.endpoint();
         switch (current.state()) {
-            case BOUND -> publish(Status.LISTENING, "", endpoint);
+            case BOUND -> {
+                // Degraded outranks Unlicensed: without a bound port there is nothing to license
+                LicenseGate.Verdict verdict = license.get();
+                if (verdict == LicenseGate.Verdict.LICENSED) {
+                    publish(Status.LISTENING, "", endpoint);
+                } else {
+                    publish(Status.UNLICENSED,
+                            verdict == LicenseGate.Verdict.EXPIRED ? EXPIRED_NOTE : UNLICENSED_NOTE, endpoint);
+                }
+            }
             case FAILED -> publish(Status.DEGRADED, current.lastError() + " " + REMEDIATION, endpoint);
             case CLOSED -> publish(Status.DISABLED, "", "");
         }

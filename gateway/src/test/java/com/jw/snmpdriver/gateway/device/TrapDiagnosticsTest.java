@@ -13,6 +13,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
+import com.jw.snmpdriver.snmp.runtime.LicenseGate;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
 import com.jw.snmpdriver.snmp.trap.TrapListenerRegistry;
 import org.junit.jupiter.api.AfterEach;
@@ -63,6 +64,36 @@ class TrapDiagnosticsTest {
 
         diagnostics.refresh();
         assertEquals("", nodes.get("LastError"));
+    }
+
+    @Test
+    void unlicensedShowsStatusUnlicensedAndFollowsLicenseOnRefresh() {
+        java.util.concurrent.atomic.AtomicReference<LicenseGate.Verdict> verdict =
+                new java.util.concurrent.atomic.AtomicReference<>(LicenseGate.Verdict.NOT_AVAILABLE);
+        TrapDiagnostics licensed = new TrapDiagnostics(nodes::put, verdict::get);
+        licensed.track(registry().acquire("dev-a", "0.0.0.0", 10162, licensed::refresh));
+
+        assertEquals("Unlicensed", nodes.get("Status"));
+        assertTrue(nodes.get("LastError").contains("许可证"));
+        assertEquals("0.0.0.0:10162", nodes.get("ListenerEndpoint"));
+
+        verdict.set(LicenseGate.Verdict.EXPIRED);
+        licensed.refresh();
+        assertTrue(nodes.get("LastError").contains("过期"));
+
+        verdict.set(LicenseGate.Verdict.LICENSED);
+        licensed.refresh();
+        assertEquals("Listening", nodes.get("Status"));
+        assertEquals("", nodes.get("LastError"));
+    }
+
+    @Test
+    void degradedOutranksUnlicensed() {
+        TrapDiagnostics licensed = new TrapDiagnostics(nodes::put, () -> LicenseGate.Verdict.NOT_AVAILABLE);
+        failures = 1;
+        licensed.track(registry().acquire("dev-a", "0.0.0.0", 10162, licensed::refresh));
+
+        assertEquals("Degraded", nodes.get("Status"));
     }
 
     @Test
