@@ -13,10 +13,22 @@ final class V1TrapNormalizer {
     static final OID SYS_UP_TIME = new OID("1.3.6.1.2.1.1.3.0");
     static final OID SNMP_TRAP_OID = new OID("1.3.6.1.6.3.1.1.4.1.0");
     static final OID SNMP_TRAP_ADDRESS = new OID("1.3.6.1.6.3.18.1.3.0");
+    static final OID SNMP_TRAP_COMMUNITY = new OID("1.3.6.1.6.3.18.1.4.0");
     static final OID SNMP_TRAP_ENTERPRISE = new OID("1.3.6.1.6.3.1.1.4.3.0");
     private static final String GENERIC_PREFIX = "1.3.6.1.6.3.1.1.5.";
 
     private V1TrapNormalizer() {
+    }
+
+    /** A forwarder may already carry snmpTrapCommunity.0; it must never reach a Tag. */
+    static List<VariableBinding> withoutCommunity(List<? extends VariableBinding> varbinds) {
+        List<VariableBinding> kept = new ArrayList<>(varbinds.size());
+        for (VariableBinding varbind : varbinds) {
+            if (!SNMP_TRAP_COMMUNITY.equals(varbind.getOid())) {
+                kept.add(varbind);
+            }
+        }
+        return kept;
     }
 
     static OID trapOid(PDUv1 pdu) {
@@ -34,7 +46,7 @@ final class V1TrapNormalizer {
         List<VariableBinding> result = new ArrayList<>(pdu.size() + 4);
         result.add(new VariableBinding(SYS_UP_TIME, new TimeTicks(pdu.getTimestamp())));
         result.add(new VariableBinding(SNMP_TRAP_OID, trapOid(pdu)));
-        for (VariableBinding original : pdu.getAll()) {
+        for (VariableBinding original : withoutCommunity(pdu.getAll())) {
             result.add(new VariableBinding(original.getOid(), original.getVariable()));
         }
         result.add(new VariableBinding(SNMP_TRAP_ADDRESS, pdu.getAgentAddress()));

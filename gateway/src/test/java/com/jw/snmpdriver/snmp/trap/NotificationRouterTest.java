@@ -215,4 +215,52 @@ class NotificationRouterTest {
         router.onNotification(incoming("10.0.0.1", "public",
                 v2Trap(PDU.TRAP, "1.3.6.1.6.3.1.1.5.3"), TrapNotification.Version.V2C));
     }
+
+    @Test
+    void failingDeviceCallbackDoesNotStopTheBroadcastToOthers() throws Exception {
+        TrapRecipient bad = new TrapRecipient("bad", new TrapFilter("10.0.0.1", "", bytes("public"), NO_DNS),
+                new TrapCounters(), n -> {
+                    throw new IllegalStateException("boom");
+                }, s -> { });
+        Device good = new Device("good", "10.0.0.1", "public");
+        router.add(bad);
+        router.add(good.recipient);
+
+        router.onNotification(incoming("10.0.0.1", "public",
+                v2Trap(PDU.TRAP, "1.3.6.1.6.3.1.1.5.3"), TrapNotification.Version.V2C));
+
+        assertEquals(1, good.received.size());
+        assertEquals(1, good.counters.received());
+    }
+
+    @Test
+    void failingAuthNoticeDoesNotStopTheBroadcastToOthers() throws Exception {
+        TrapRecipient bad = new TrapRecipient("bad", new TrapFilter("10.0.0.1", "", bytes("other"), NO_DNS),
+                new TrapCounters(), n -> { }, s -> {
+                    throw new IllegalStateException("boom");
+                });
+        Device good = new Device("good", "10.0.0.1", "public");
+        router.add(bad);
+        router.add(good.recipient);
+
+        router.onNotification(incoming("10.0.0.1", "public",
+                v2Trap(PDU.TRAP, "1.3.6.1.6.3.1.1.5.3"), TrapNotification.Version.V2C));
+
+        assertEquals(1, good.received.size());
+    }
+
+    @Test
+    void v2cCommunityVarbindIsNotHandedToDevices() throws Exception {
+        Device a = new Device("a", "10.0.0.1", "public");
+        router.add(a.recipient);
+        PDU pdu = v2Trap(PDU.TRAP, "1.3.6.1.6.3.1.1.5.3");
+        pdu.add(new VariableBinding(V1TrapNormalizer.SNMP_TRAP_COMMUNITY, new OctetString("secret")));
+
+        router.onNotification(incoming("10.0.0.1", "public", pdu, TrapNotification.Version.V2C));
+
+        assertEquals(3, a.received.get(0).varbinds().size());
+        for (VariableBinding vb : a.received.get(0).varbinds()) {
+            assertTrue(!vb.getOid().equals(V1TrapNormalizer.SNMP_TRAP_COMMUNITY));
+        }
+    }
 }

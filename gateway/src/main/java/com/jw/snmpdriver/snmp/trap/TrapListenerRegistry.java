@@ -72,12 +72,14 @@ public final class TrapListenerRegistry {
         if (onChange != null) {
             listener.watchers.add(onChange);
         }
-        ScheduledFuture<?> refresh = null;
         if (recipient != null) {
             listener.router.add(recipient);
-            refresh = scheduleSourceRefresh(recipient);
+            ScheduledFuture<?> refresh = scheduleSourceRefresh(recipient);
+            if (refresh != null) {
+                listener.refreshes.put(recipient, refresh);
+            }
         }
-        return new TrapListenerHandle(this, listener, null, deviceName, onChange, recipient, refresh);
+        return new TrapListenerHandle(this, listener, null, deviceName, onChange, recipient);
     }
 
     public synchronized void closeAll() {
@@ -88,12 +90,13 @@ public final class TrapListenerRegistry {
     }
 
     synchronized void release(Listener listener, String deviceName, Runnable onChange,
-                              TrapRecipient recipient, ScheduledFuture<?> refresh) {
-        if (refresh != null) {
-            refresh.cancel(false);
-        }
+                              TrapRecipient recipient) {
         if (recipient != null) {
             listener.router.remove(recipient);
+            ScheduledFuture<?> refresh = listener.refreshes.remove(recipient);
+            if (refresh != null) {
+                refresh.cancel(false);
+            }
         }
         listener.holders.remove(deviceName);
         if (onChange != null) {
@@ -106,16 +109,18 @@ public final class TrapListenerRegistry {
         close(listener);
     }
 
-    synchronized TrapListenerState stateOf(Listener listener) {
+    // Lock-free on purpose: the transport thread reads these while close() holds the registry lock
+    // and waits for that same thread to finish.
+    TrapListenerState stateOf(Listener listener) {
         return listener.state;
     }
 
-    synchronized String lastErrorOf(Listener listener) {
+    String lastErrorOf(Listener listener) {
         return listener.lastError;
     }
 
     private TrapListenerHandle rejected(String reason) {
-        return new TrapListenerHandle(this, null, reason, null, null, null, null);
+        return new TrapListenerHandle(this, null, reason, null, null, null);
     }
 
     /** Host DNS is re-resolved off the transport thread; the first run happens immediately. */
@@ -223,6 +228,11 @@ public final class TrapListenerRegistry {
     }
 
     private void close(Listener listener) {
+        for (ScheduledFuture<?> refresh : listener.refreshes.values()) {
+            refresh.cancel(false);
+        }
+        listener.refreshes.clear();
+        listener.router.clear();
         if (listener.retry != null) {
             listener.retry.cancel(false);
             listener.retry = null;
@@ -254,12 +264,13 @@ public final class TrapListenerRegistry {
         final InetAddress address;
         final List<String> holders = new ArrayList<>();
         int refCount;
-        TrapListenerState state = TrapListenerState.FAILED;
-        String lastError;
+        volatile TrapListenerState state = TrapListenerState.FAILED;
+        volatile String lastError;
         Closeable bound;
         ScheduledFuture<?> retry;
         final List<Runnable> watchers = new ArrayList<>();
         final NotificationRouter router;
+        final Map<TrapRecipient, ScheduledFuture<?>> refreshes = new HashMap<>();
 
         Listener(int port, InetAddress address) {
             this.port = port;

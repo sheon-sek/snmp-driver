@@ -8,19 +8,16 @@ public final class TrapListenerHandle {
     private final String deviceName;
     private final Runnable onChange;
     private final TrapRecipient recipient;
-    private final java.util.concurrent.ScheduledFuture<?> sourceRefresh;
     private boolean released;
 
     TrapListenerHandle(TrapListenerRegistry registry, TrapListenerRegistry.Listener listener, String rejection,
-                       String deviceName, Runnable onChange, TrapRecipient recipient,
-                       java.util.concurrent.ScheduledFuture<?> sourceRefresh) {
+                       String deviceName, Runnable onChange, TrapRecipient recipient) {
         this.registry = registry;
         this.listener = listener;
         this.rejection = rejection;
         this.deviceName = deviceName;
         this.onChange = onChange;
         this.recipient = recipient;
-        this.sourceRefresh = sourceRefresh;
     }
 
     public boolean isRejected() {
@@ -61,6 +58,6 @@ public final class TrapListenerHandle {
             return;
         }
         released = true;
-        registry.release(listener, deviceName, onChange, recipient, sourceRefresh);
+        registry.release(listener, deviceName, onChange, recipient);
     }
 }

@@ -59,7 +59,20 @@ class V1TrapNormalizerTest {
 
         assertEquals(new OID("1.3.6.1.6.3.1.1.5.2"), out.get(1).getVariable());
         for (VariableBinding vb : out) {
-            assertTrue(!vb.getOid().equals(new OID("1.3.6.1.6.3.18.1.4.0")), "snmpTrapCommunity.0 must not appear");
+            assertTrue(!vb.getOid().equals(V1TrapNormalizer.SNMP_TRAP_COMMUNITY));
         }
+    }
+
+    @Test
+    void communityVarbindAlreadyInThePduIsStripped() {
+        PDUv1 pdu = v1(1, 0);
+        pdu.add(new VariableBinding(V1TrapNormalizer.SNMP_TRAP_COMMUNITY, new OctetString("secret")));
+
+        List<VariableBinding> out = V1TrapNormalizer.normalize(pdu);
+
+        for (VariableBinding vb : out) {
+            assertTrue(!vb.getOid().equals(V1TrapNormalizer.SNMP_TRAP_COMMUNITY), "community leaked: " + vb);
+        }
+        assertEquals(5, out.size());
     }
 }

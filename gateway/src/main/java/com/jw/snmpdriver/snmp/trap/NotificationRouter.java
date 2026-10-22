@@ -44,6 +44,10 @@ final class NotificationRouter implements NotificationHandler {
         recipients.remove(recipient);
     }
 
+    void clear() {
+        recipients.clear();
+    }
+
     long unmatchedCount() {
         return unmatched.get();
     }
@@ -83,24 +87,30 @@ final class NotificationRouter implements NotificationHandler {
         TrapNotification notification = null;
         boolean parsed = false;
         for (TrapRecipient recipient : matched) {
-            if (!recipient.filter().authenticate(incoming.community())) {
-                recipient.counters().countAuthFailure();
-                recipient.notice().accept("来自 " + incoming.source().getHostAddress()
-                        + " 的 Notification 认证失败：community 不匹配。请检查 Trap Community"
-                        + "（为空时使用 Read Community）。");
-                continue;
+            try {
+                if (!recipient.filter().authenticate(incoming.community())) {
+                    recipient.counters().countAuthFailure();
+                    recipient.notice().accept("来自 " + incoming.source().getHostAddress()
+                            + " 的 Notification 认证失败：community 不匹配。请检查 Trap Community"
+                            + "（为空时使用 Read Community）。");
+                    continue;
+                }
+                if (!parsed) {
+                    notification = parse(incoming);
+                    parsed = true;
+                }
+                if (notification == null) {
+                    logger.debug("Ignored malformed or unsupported Notification port={} source={} category=trap",
+                            port, incoming.source());
+                    return;
+                }
+                recipient.counters().countReceived();
+                recipient.sink().accept(notification);
+            } catch (RuntimeException error) {
+                // one Device's failing callback must not stop the broadcast to the others
+                logger.warn("Failed to deliver Notification device={} port={} source={} category=trap",
+                        recipient.deviceName(), port, incoming.source(), error);
             }
-            if (!parsed) {
-                notification = parse(incoming);
-                parsed = true;
-            }
-            if (notification == null) {
-                logger.debug("Ignored malformed or unsupported Notification port={} source={} category=trap",
-                        port, incoming.source());
-                return;
-            }
-            recipient.counters().countReceived();
-            recipient.sink().accept(notification);
         }
     }
 
@@ -118,7 +128,7 @@ final class NotificationRouter implements NotificationHandler {
                         v1.getTimestamp(), V1TrapNormalizer.trapOid(v1).toDottedString(), varbinds);
             }
             case PDU.TRAP, PDU.INFORM -> {
-                List<VariableBinding> varbinds = List.copyOf(pdu.getAll());
+                List<VariableBinding> varbinds = V1TrapNormalizer.withoutCommunity(List.copyOf(pdu.getAll()));
                 if (varbinds.size() < 2
                         || !V1TrapNormalizer.SYS_UP_TIME.equals(varbinds.get(0).getOid())
                         || !V1TrapNormalizer.SNMP_TRAP_OID.equals(varbinds.get(1).getOid())

@@ -85,4 +85,13 @@ class TrapFilterTest {
         assertFalse(filter.matchesSource(ip("10.0.0.1")));
         assertEquals(false, filter.matchesSource(ip("10.0.0.2")));
     }
+
+    @Test
+    void ipv4MappedIpv6CidrKeepsItsMeaning() throws Exception {
+        TrapFilter filter = new TrapFilter("", "::ffff:192.0.2.0/120, ::ffff:10.0.0.0/64", bytes("c"), NO_DNS);
+
+        assertTrue(filter.matchesSource(ip("192.0.2.77")));
+        assertFalse(filter.matchesSource(ip("192.0.3.1")));
+        assertFalse(filter.matchesSource(ip("10.0.0.1")), "a mapped prefix shorter than /96 is not representable");
+    }
 }

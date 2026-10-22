@@ -85,7 +85,9 @@ public final class TrapFilter {
             if (address == null) {
                 continue;
             }
-            int max = address.getAddress().length * 8;
+            // Java turns ::ffff:a.b.c.d into an IPv4 address, so the written prefix is in IPv6 bits
+            int shift = trimmed.indexOf(':') >= 0 && address.getAddress().length == 4 ? 96 : 0;
+            int max = address.getAddress().length * 8 + shift;
             int prefix = max;
             if (slash >= 0) {
                 try {
@@ -93,10 +95,11 @@ public final class TrapFilter {
                 } catch (NumberFormatException error) {
                     continue;
                 }
-                if (prefix < 0 || prefix > max) {
-                    continue;
+                if (prefix < shift || prefix > max) {
+                    continue; // a mapped prefix shorter than /96 spans non-IPv4 space
                 }
             }
+            prefix -= shift;
             result.add(new Cidr(address.getAddress(), prefix));
         }
         return result;
