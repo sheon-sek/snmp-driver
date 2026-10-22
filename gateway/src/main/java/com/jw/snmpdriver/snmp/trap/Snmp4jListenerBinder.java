@@ -4,13 +4,18 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetAddress;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.snmp4j.CommandResponder;
 import org.snmp4j.CommandResponderEvent;
 import org.snmp4j.MessageDispatcherImpl;
+import org.snmp4j.MessageException;
 import org.snmp4j.PDU;
 import org.snmp4j.Snmp;
 import org.snmp4j.mp.MPv1;
 import org.snmp4j.mp.MPv2c;
+import org.snmp4j.mp.StatusInformation;
 import org.snmp4j.smi.Address;
 import org.snmp4j.smi.UdpAddress;
 import org.snmp4j.transport.DefaultUdpTransportMapping;
@@ -20,6 +25,8 @@ import org.snmp4j.transport.DefaultUdpTransportMapping;
  * is deliberately not used: it ACKs an Inform before we have decided anything (ADR 0004).
  */
 public final class Snmp4jListenerBinder implements ListenerBinder {
+    private static final Logger logger = LoggerFactory.getLogger(Snmp4jListenerBinder.class);
+
     @Override
     public Closeable bind(InetAddress address, int port) throws IOException {
         return bind(address, port, notification -> { });
@@ -61,6 +68,22 @@ public final class Snmp4jListenerBinder implements ListenerBinder {
         TrapNotification.Version version = event.getMessageProcessingModel() == MPv1.ID
                 ? TrapNotification.Version.V1 : TrapNotification.Version.V2C;
         handler.onNotification(new IncomingNotification(
-                peer.getInetAddress(), peer.getPort(), version, event.getSecurityName(), pdu));
+                peer.getInetAddress(), peer.getPort(), version, event.getSecurityName(), pdu,
+                type == PDU.INFORM ? () -> acknowledge(event, pdu) : null));
+    }
+
+    /** The RESPONSE echoes the Inform's request-id and varbinds, sent back with its own security parameters. */
+    private static void acknowledge(CommandResponderEvent<?> event, PDU inform) {
+        PDU response = (PDU) inform.clone();
+        response.setType(PDU.RESPONSE);
+        response.setErrorStatus(0);
+        response.setErrorIndex(0);
+        try {
+            event.getMessageDispatcher().returnResponsePdu(event.getMessageProcessingModel(),
+                    event.getSecurityModel(), event.getSecurityName(), event.getSecurityLevel(), response,
+                    event.getMaxSizeResponsePDU(), event.getStateReference(), new StatusInformation());
+        } catch (MessageException | RuntimeException error) {
+            logger.warn("Failed to ACK Inform peer={} category=trap", event.getPeerAddress(), error);
+        }
     }
 }
