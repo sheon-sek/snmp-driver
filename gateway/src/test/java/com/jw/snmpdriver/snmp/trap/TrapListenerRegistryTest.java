@@ -143,6 +143,22 @@ class TrapListenerRegistryTest {
     }
 
     @Test
+    void rejectedDeviceCanAcquireAfterFirstArrivalReleases() {
+        FakeBinder binder = new FakeBinder();
+        TrapListenerRegistry registry = new TrapListenerRegistry(binder, scheduler);
+        TrapListenerHandle first = registry.acquire("dev-a", "0.0.0.0", 10162);
+        TrapListenerHandle rejected = registry.acquire("dev-b", "127.0.0.1", 10162);
+        assertTrue(rejected.isRejected());
+
+        first.release();
+        TrapListenerHandle retried = registry.acquire("dev-b", "127.0.0.1", 10162);
+
+        assertFalse(retried.isRejected());
+        assertEquals(TrapListenerState.BOUND, retried.state());
+        assertEquals("127.0.0.1:10162", retried.endpoint());
+    }
+
+    @Test
     void invalidBindAddressIsRejectedWithoutDnsLookup() {
         TrapListenerRegistry registry = new TrapListenerRegistry(new FakeBinder(), scheduler);
 

@@ -93,6 +93,33 @@ class TrapDiagnosticsTest {
     }
 
     @Test
+    void conflictNamesOwnerAndAddressWhileFirstArrivalKeepsListeningAndRecoversAfterRelease() {
+        TrapListenerRegistry registry = registry();
+        Map<String, String> firstNodes = new LinkedHashMap<>();
+        TrapDiagnostics firstDiagnostics = new TrapDiagnostics(firstNodes::put);
+        TrapListenerHandle first = registry.acquire("dev-a", "0.0.0.0", 10162, firstDiagnostics::refresh);
+        firstDiagnostics.track(first);
+
+        diagnostics.track(registry.acquire("dev-b", "127.0.0.1", 10162, diagnostics::refresh));
+
+        assertEquals("Degraded", nodes.get("Status"));
+        String error = nodes.get("LastError");
+        assertTrue(error.contains("dev-a") && error.contains("0.0.0.0"), error);
+        assertTrue(error.contains("127.0.0.1"), error);
+        assertEquals("Listening", firstNodes.get("Status"));
+        assertEquals("", firstNodes.get("LastError"));
+
+        first.release();
+        firstDiagnostics.released();
+        diagnostics.track(registry.acquire("dev-b", "127.0.0.1", 10162, diagnostics::refresh));
+
+        assertEquals("Listening", nodes.get("Status"));
+        assertEquals("", nodes.get("LastError"));
+        assertEquals("127.0.0.1:10162", nodes.get("ListenerEndpoint"));
+        assertEquals("Disabled", firstNodes.get("Status"));
+    }
+
+    @Test
     void unavailableRegistryShowsDegraded() {
         diagnostics.showUnavailable("Trap 监听器注册表不可用");
 
