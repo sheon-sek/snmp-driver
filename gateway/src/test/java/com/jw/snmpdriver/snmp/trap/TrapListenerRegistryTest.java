@@ -212,6 +212,76 @@ class TrapListenerRegistryTest {
         assertEquals(1, reported.size());
     }
 
+    @Test
+    void reconfiguredDeviceReacquiresSamePortAfterOldHandleReleased() {
+        FakeBinder binder = new FakeBinder();
+        TrapListenerRegistry registry = new TrapListenerRegistry(binder, scheduler);
+        TrapListenerHandle old = registry.acquire("dev-a", "0.0.0.0", 10162);
+        assertEquals(1, binder.open());
+
+        old.release(); // 旧设备 shutdown
+        TrapListenerHandle fresh = registry.acquire("dev-a", "127.0.0.1", 10162);
+
+        assertFalse(fresh.isRejected());
+        assertEquals(TrapListenerState.BOUND, fresh.state());
+        assertEquals("127.0.0.1:10162", fresh.endpoint());
+        assertEquals(1, binder.open(), "旧 socket 已关闭，只剩新 listener");
+        assertEquals(TrapListenerState.CLOSED, old.state());
+    }
+
+    @Test
+    void conflictNamesCurrentHolderNotReleasedFirstArrival() {
+        TrapListenerRegistry registry = new TrapListenerRegistry(new FakeBinder(), scheduler);
+        TrapListenerHandle a = registry.acquire("dev-a", "0.0.0.0", 10162);
+        TrapListenerHandle b = registry.acquire("dev-b", "0.0.0.0", 10162);
+        a.release();
+
+        TrapListenerHandle c = registry.acquire("dev-c", "127.0.0.1", 10162);
+
+        assertTrue(c.isRejected());
+        assertFalse(c.rejection().contains("dev-a"), c.rejection());
+        assertTrue(c.rejection().contains("dev-b"), c.rejection());
+        assertTrue(c.rejection().contains("0.0.0.0"), c.rejection());
+        b.release();
+    }
+
+    @Test
+    void bindAddressMustBeStrictIpLiteral() {
+        TrapListenerRegistry registry = new TrapListenerRegistry(new FakeBinder(), scheduler);
+
+        assertTrue(registry.acquire("dev-a", "1.2.3", 10162).isRejected(), "缺段的 IPv4 简写不是点分十进制");
+        assertTrue(registry.acquire("dev-a", "deadbeef", 10162).isRejected());
+        assertFalse(registry.acquire("dev-a", " ::1 ", 10163).isRejected());
+    }
+
+    @Test
+    void retryBindRunsOutsideRegistryLockAndDropsResultIfReleasedMeanwhile() throws Exception {
+        FakeBinder binder = new FakeBinder();
+        binder.failures = 1;
+        TrapListenerRegistry registry = new TrapListenerRegistry(binder, scheduler);
+        TrapListenerHandle handle = registry.acquire("dev-a", "0.0.0.0", 10162);
+        assertEquals(TrapListenerState.FAILED, handle.state());
+        binder.gate = new java.util.concurrent.CountDownLatch(1);
+        binder.entered = new java.util.concurrent.CountDownLatch(1);
+
+        Thread retrying = new Thread(scheduler::runPending);
+        retrying.start();
+        assertTrue(binder.entered.await(5, TimeUnit.SECONDS));
+
+        // bind 正在阻塞：registry 仍可服务其他端口与 release
+        java.util.concurrent.CompletableFuture<Void> others = java.util.concurrent.CompletableFuture.runAsync(() -> {
+            registry.acquire("dev-b", "0.0.0.0", 10163);
+            handle.release();
+        });
+        others.get(5, TimeUnit.SECONDS);
+
+        binder.gate.countDown();
+        retrying.join(5000);
+        assertEquals(TrapListenerState.CLOSED, handle.state());
+        assertEquals(1, binder.open(), "迟到的 bind 结果被关闭，只剩 10163 的 listener");
+        assertEquals(0, scheduler.pendingCount());
+    }
+
     private static int freePort() throws IOException {
         try (DatagramSocket socket = new DatagramSocket(0, InetAddress.getLoopbackAddress())) {
             return socket.getLocalPort();
@@ -229,12 +299,23 @@ class TrapListenerRegistryTest {
     private static final class FakeBinder implements ListenerBinder {
         int failures;
         int attempts;
+        volatile java.util.concurrent.CountDownLatch gate;
+        volatile java.util.concurrent.CountDownLatch entered;
         final List<Closeable> bound = new ArrayList<>();
         private final List<boolean[]> closed = new ArrayList<>();
 
         @Override
         public Closeable bind(InetAddress address, int port) throws IOException {
             attempts++;
+            java.util.concurrent.CountDownLatch blocker = gate;
+            if (blocker != null && port == 10162) {
+                entered.countDown();
+                try {
+                    blocker.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             if (failures > 0) {
                 failures--;
                 throw new IOException("Address already in use");

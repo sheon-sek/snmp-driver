@@ -1,8 +1,6 @@
 package com.jw.snmpdriver.gateway.device;
 
 import java.lang.reflect.RecordComponent;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -22,6 +20,7 @@ import com.inductiveautomation.ignition.gateway.web.nav.MenuAction;
 import com.inductiveautomation.ignition.gateway.web.nav.WebUiComponent;
 import com.jw.snmpdriver.common.ModuleConstants;
 import com.jw.snmpdriver.gateway.service.ServiceBundle;
+import com.jw.snmpdriver.snmp.trap.TrapListenerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -198,20 +197,7 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
         return true;
     }
 
-    /** 只接受 IP 字面量；不含 ':' 时必须是点分十进制，避免触发 DNS 解析。 */
     private static boolean isIpLiteral(String text) {
-        boolean ipv6 = text.indexOf(':') >= 0;
-        if (!ipv6 && !text.matches("(\\d{1,3}\\.){3}\\d{1,3}")) {
-            return false;
-        }
-        if (ipv6 && !text.matches("[0-9a-fA-F:.]+")) {
-            return false;
-        }
-        try {
-            InetAddress.getByName(text);
-            return true;
-        } catch (UnknownHostException error) {
-            return false;
-        }
+        return TrapListenerRegistry.parseIpLiteral(text) != null;
     }
 }

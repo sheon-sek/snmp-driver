@@ -120,6 +120,44 @@ class TrapDiagnosticsTest {
     }
 
     @Test
+    void conflictAfterFirstArrivalReleasesPointsAtRemainingHolder() {
+        TrapListenerRegistry registry = registry();
+        TrapListenerHandle a = registry.acquire("dev-a", "0.0.0.0", 10162);
+        TrapListenerHandle b = registry.acquire("dev-b", "0.0.0.0", 10162);
+        a.release();
+
+        diagnostics.track(registry.acquire("dev-c", "127.0.0.1", 10162, diagnostics::refresh));
+
+        String error = nodes.get("LastError");
+        assertTrue(error.contains("dev-b") && !error.contains("dev-a"), error);
+        b.release();
+    }
+
+    @Test
+    void reconfiguredDeviceListensAgainOnSamePort() {
+        TrapListenerRegistry registry = registry();
+        TrapListenerHandle old = registry.acquire("dev-a", "0.0.0.0", 10162, diagnostics::refresh);
+        diagnostics.track(old);
+        old.release();
+        diagnostics.released();
+        assertEquals("Disabled", nodes.get("Status"));
+
+        diagnostics.track(registry.acquire("dev-a", "0.0.0.0", 10162, diagnostics::refresh));
+
+        assertEquals("Listening", nodes.get("Status"));
+        assertEquals("0.0.0.0:10162", nodes.get("ListenerEndpoint"));
+    }
+
+    @Test
+    void nodeDescriptionsStateM1aOnlyHoldsThePort() {
+        for (String name : List.of("Status", "LastError", "ListenerEndpoint")) {
+            String description = TrapDiagnostics.describe(name);
+            assertTrue(description.contains("M1a 仅占用端口，尚未处理收到的 Notification"), description);
+            assertTrue(description.contains(name), description);
+        }
+    }
+
+    @Test
     void unavailableRegistryShowsDegraded() {
         diagnostics.showUnavailable("Trap 监听器注册表不可用");
 

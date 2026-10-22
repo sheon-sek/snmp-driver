@@ -5,14 +5,16 @@ public final class TrapListenerHandle {
     private final TrapListenerRegistry registry;
     private final TrapListenerRegistry.Listener listener;
     private final String rejection;
+    private final String deviceName;
     private final Runnable onChange;
     private boolean released;
 
     TrapListenerHandle(TrapListenerRegistry registry, TrapListenerRegistry.Listener listener, String rejection,
-                       Runnable onChange) {
+                       String deviceName, Runnable onChange) {
         this.registry = registry;
         this.listener = listener;
         this.rejection = rejection;
+        this.deviceName = deviceName;
         this.onChange = onChange;
     }
 
@@ -44,6 +46,6 @@ public final class TrapListenerHandle {
             return;
         }
         released = true;
-        registry.release(listener, onChange);
+        registry.release(listener, deviceName, onChange);
     }
 }

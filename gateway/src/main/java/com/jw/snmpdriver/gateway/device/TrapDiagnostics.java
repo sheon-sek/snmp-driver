@@ -1,5 +1,7 @@
 package com.jw.snmpdriver.gateway.device;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.BiConsumer;
 
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
@@ -27,7 +29,25 @@ public final class TrapDiagnostics {
             + "Windows 上请检查系统 SNMPTRAP 服务是否占用了 UDP 162（停用该服务或改用其他端口）；"
             + "也可能是端口已被其他进程占用，Gateway 每 30 秒自动重试。";
 
+    private static final String M1A_NOTE = "M1a 仅占用端口，尚未处理收到的 Notification";
+
     private static final Logger logger = LoggerFactory.getLogger(TrapDiagnostics.class);
+
+    private enum Status {
+        DISABLED("Disabled"),
+        LISTENING("Listening"),
+        DEGRADED("Degraded");
+
+        private final String text;
+
+        Status(String text) {
+            this.text = text;
+        }
+    }
+
+    static String describe(String name) {
+        return "SNMP Device Trap diagnostic: " + name + "。" + M1A_NOTE;
+    }
 
     private final BiConsumer<String, String> sink;
     private TrapListenerHandle handle;
@@ -57,12 +77,12 @@ public final class TrapDiagnostics {
 
     public synchronized void showDisabled() {
         handle = null;
-        publish("Disabled", "", "");
+        publish(Status.DISABLED, "", "");
     }
 
     public synchronized void showUnavailable(String reason) {
         handle = null;
-        publish("Degraded", reason + " " + REMEDIATION, "");
+        publish(Status.DEGRADED, reason + " " + REMEDIATION, "");
     }
 
     /** Follows this handle; later registry changes arrive through {@link #refresh()}. */
@@ -82,19 +102,19 @@ public final class TrapDiagnostics {
             return;
         }
         if (current.isRejected()) {
-            publish("Degraded", current.rejection() + " " + REMEDIATION, "");
+            publish(Status.DEGRADED, current.rejection() + " " + REMEDIATION, "");
             return;
         }
         String endpoint = current.endpoint() == null ? "" : current.endpoint();
         switch (current.state()) {
-            case BOUND -> publish("Listening", "", endpoint);
-            case FAILED -> publish("Degraded", current.lastError() + " " + REMEDIATION, endpoint);
-            case CLOSED -> publish("Disabled", "", "");
+            case BOUND -> publish(Status.LISTENING, "", endpoint);
+            case FAILED -> publish(Status.DEGRADED, current.lastError() + " " + REMEDIATION, endpoint);
+            case CLOSED -> publish(Status.DISABLED, "", "");
         }
     }
 
-    private void publish(String status, String error, String endpoint) {
-        sink.accept(STATUS, status);
+    private void publish(Status status, String error, String endpoint) {
+        sink.accept(STATUS, status.text);
         sink.accept(LAST_ERROR, error);
         sink.accept(LISTENER_ENDPOINT, endpoint);
     }
@@ -102,7 +122,7 @@ public final class TrapDiagnostics {
     private static final class NodeWriter {
         private final SNMPDevice addressSpace;
         private final DeviceContext context;
-        private final java.util.Map<String, UaVariableNode> nodes = new java.util.HashMap<>();
+        private final Map<String, UaVariableNode> nodes = new HashMap<>();
 
         NodeWriter(SNMPDevice addressSpace, DeviceContext context) {
             this.addressSpace = addressSpace;
@@ -128,7 +148,7 @@ public final class TrapDiagnostics {
                     .setNodeId(context.nodeId(FOLDER_ID + "/" + name))
                     .setBrowseName(context.qualifiedName(name))
                     .setDisplayName(LocalizedText.english(name))
-                    .setDescription(LocalizedText.english("SNMP Device Trap diagnostic: " + name))
+                    .setDescription(LocalizedText.english(describe(name)))
                     .setTypeDefinition(Identifiers.BaseDataVariableType)
                     .setDataType(Identifiers.String)
                     .setValueRank(ValueRanks.Scalar)
