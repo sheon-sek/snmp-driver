@@ -71,7 +71,8 @@ final class DeviceStatusMachine {
             setStatus("Unlicensed");
         } else if (failure.legalResponse()) {
             running(callbackGeneration, activeOidCount);
-        } else if (failure.circuitFailure() || "resource".equals(failure.category())) {
+        } else if (failure.circuitFailure() || "resource".equals(failure.category())
+                || "transport-unavailable".equals(failure.category())) {
             setStatus("Degraded");
         } else if (failure.unexpected()) {
             setStatus("Errored");

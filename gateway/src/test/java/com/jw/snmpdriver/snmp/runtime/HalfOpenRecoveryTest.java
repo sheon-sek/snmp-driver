@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.snmp4j.smi.Integer32;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -78,19 +80,22 @@ class HalfOpenRecoveryTest {
         assertEquals(DeviceCircuitBreaker.State.CLOSED, handle.snapshot().circuitState());
     }
 
-    @Test
-    void repeatedLicensePausesDoNotEscalateTheNextNetworkBackoff() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void repeatedLocalPausesDoNotEscalateTheNextNetworkBackoff(boolean transportUnavailable) {
         DevicePollHandle handle = registerDevice();
         handle.subscribe(address(), 1_000, values::add, ignored -> {});
         openCircuitWithGets();
         scheduler.advanceBy(2_500, TimeUnit.MILLISECONDS);
         for (int probe = 2; probe < 5; probe++) {
             client.gets.get(probe).result().completeExceptionally(
-                    new SnmpLicenseException("license paused", StatusCodes.Bad_LicenseExpired));
+                    transportUnavailable
+                            ? new SnmpTransportUnavailableException("IPv6 transport unavailable")
+                            : new SnmpLicenseException("license paused", StatusCodes.Bad_LicenseExpired));
             scheduler.advanceBy(1_999, TimeUnit.MILLISECONDS);
             assertEquals(probe + 1, client.gets.size());
             scheduler.advanceBy(1, TimeUnit.MILLISECONDS);
-            assertEquals(probe + 2, client.gets.size(), "Each License pause retries after 2 s");
+            assertEquals(probe + 2, client.gets.size(), "Each local pause retries after 2 s");
         }
 
         client.gets.get(5).result().completeExceptionally(new SnmpNoResponseException("probe timeout"));
@@ -98,6 +103,34 @@ class HalfOpenRecoveryTest {
         assertEquals(6, client.gets.size());
         scheduler.advanceBy(501, TimeUnit.MILLISECONDS);
         assertEquals(7, client.gets.size(), "Next network backoff is 4 s plus jitter, not 8 s");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void repeatedLocalTransportFailuresDoNotOpenNetworkCircuit(boolean write) {
+        DevicePollHandle handle = registerDevice();
+        if (!write) {
+            handle.subscribe(address(), 1_000, values::add, ignored -> {});
+        }
+        for (int attempt = 0; attempt < 3; attempt++) {
+            var result = write
+                    ? handle.set(address(), new Integer32(7),
+                            scheduler.nanoTime() + TimeUnit.SECONDS.toNanos(30)).toCompletableFuture()
+                    : null;
+            scheduler.runReady();
+            if (write) {
+                assertEquals(attempt + 1, client.sets.size());
+                client.sets.get(attempt).result().completeExceptionally(
+                        new SnmpTransportUnavailableException("IPv6 transport unavailable"));
+                assertTrue(result.isCompletedExceptionally());
+            } else {
+                assertEquals(attempt + 1, client.gets.size());
+                client.gets.get(attempt).result().completeExceptionally(
+                        new SnmpTransportUnavailableException("IPv6 transport unavailable"));
+            }
+            assertEquals(DeviceCircuitBreaker.State.CLOSED, handle.snapshot().circuitState());
+            scheduler.advanceBy(1, TimeUnit.SECONDS);
+        }
     }
 
     @Test
@@ -203,6 +236,7 @@ class HalfOpenRecoveryTest {
                 new SnmpLicenseException("license paused", StatusCodes.Bad_LicenseExpired),
                 new IllegalArgumentException("invalid request configuration"),
                 new RejectedExecutionException("resource unavailable"),
+                new CompletionException(new SnmpTransportUnavailableException("IPv6 transport unavailable")),
                 new CancellationException("request cancelled"),
                 new IllegalStateException("local processing failed")
         ).flatMap(failure -> Stream.of(Arguments.of(failure, false), Arguments.of(failure, true)));

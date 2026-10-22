@@ -7,6 +7,7 @@ import java.util.concurrent.RejectedExecutionException;
 
 import com.jw.snmpdriver.snmp.runtime.SnmpNoResponseException;
 import com.jw.snmpdriver.snmp.runtime.SnmpProtocolException;
+import com.jw.snmpdriver.snmp.runtime.SnmpTransportUnavailableException;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueException;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.junit.jupiter.api.Test;
@@ -114,6 +115,18 @@ class DeviceStatusMachineTest {
         state.running(generation, 1);
 
         assertEquals("Running", state.status());
+    }
+
+    @Test
+    void localTransportAbsenceDegradesAndValidResponseRecovers() {
+        state.running(generation, 1);
+        state.failure(generation, new SnmpTransportUnavailableException("IPv6 transport unavailable"), 1);
+
+        assertEquals("Degraded", state.status());
+
+        state.running(generation, 1);
+        assertEquals("Running", state.status());
+        assertEquals(List.of("Running", "Degraded", "Running"), published);
     }
 
     @Test

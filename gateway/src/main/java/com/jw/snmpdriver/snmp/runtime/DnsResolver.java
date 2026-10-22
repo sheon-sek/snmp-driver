@@ -89,7 +89,7 @@ public final class DnsResolver implements AutoCloseable {
                     || (endpoint.ipFamily() == SNMPDeviceConfig.IpFamily.AUTO
                     && Arrays.stream(candidates).noneMatch(Inet4Address.class::isInstance)
                     && Arrays.stream(candidates).anyMatch(Inet6Address.class::isInstance)))) {
-                throw new IOException("SNMP IPv6 transport is unavailable host=" + endpoint.host()
+                throw new SnmpTransportUnavailableException("SNMP IPv6 transport is unavailable host=" + endpoint.host()
                         + " ipFamily=" + endpoint.ipFamily()
                         + "; enable IPv6 on the Gateway host or configure an IPv4 destination");
             }

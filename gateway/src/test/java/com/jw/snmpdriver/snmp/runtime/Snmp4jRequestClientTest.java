@@ -10,9 +10,9 @@ import java.util.concurrent.TimeUnit;
 
 import com.jw.snmpdriver.gateway.device.SNMPDeviceConfig;
 import com.jw.snmpdriver.snmp.address.NumericOid;
+import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.snmp4j.CommandResponder;
 import org.snmp4j.CommandResponderEvent;
@@ -182,23 +182,26 @@ class Snmp4jRequestClientTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = SNMPDeviceConfig.IpFamily.class, names = {"IPV6", "AUTO"})
-    void ipv6OnlyDeviceReportsUnavailableTransportForGetAndSet(SNMPDeviceConfig.IpFamily family) throws Exception {
+    @CsvSource({"IPV6, false", "IPV6, true", "AUTO, false", "AUTO, true"})
+    void ipv6OnlyDeviceReportsUnavailableTransportForGetAndSet(
+            SNMPDeviceConfig.IpFamily family, boolean write) throws Exception {
         try (DnsResolver resolver = new DnsResolver();
              Snmp4jRequestClient client = new Snmp4jRequestClient(resolver, withoutIpv6())) {
             client.start();
             SnmpEndpoint endpoint = endpoint("::1", 161, family);
-            var getError = assertThrows(Exception.class,
-                    () -> client.getBatch(endpoint, List.of(OID)).toCompletableFuture().get(5, TimeUnit.SECONDS));
-            var setError = assertThrows(Exception.class,
-                    () -> client.set(endpoint, OID, new Integer32(1)).toCompletableFuture().get(5, TimeUnit.SECONDS));
+            var error = assertThrows(Exception.class, () -> {
+                var request = write ? client.set(endpoint, OID, new Integer32(1))
+                        : client.getBatch(endpoint, List.of(OID));
+                request.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            });
 
-            for (Throwable error : List.of(getError, setError)) {
-                var failure = SnmpFailureClassifier.classify(error);
-                assertEquals("transport", failure.category());
-                assertTrue(failure.message().contains("IPv6 transport is unavailable"));
-                assertFalse(failure.unexpected(), "Transport absence must degrade rather than become Errored");
-            }
+            var failure = SnmpFailureClassifier.classify(error);
+            assertEquals("transport-unavailable", failure.category());
+            assertEquals(StatusCodes.Bad_NoCommunication, failure.statusCode());
+            assertTrue(failure.message().contains("IPv6 transport is unavailable"));
+            assertFalse(failure.circuitFailure(), "Local transport absence must not advance network backoff");
+            assertFalse(failure.legalResponse());
+            assertFalse(failure.unexpected(), "Transport absence must degrade rather than become Errored");
         }
     }
 
