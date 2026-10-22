@@ -36,6 +36,7 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
     private final Supplier<LicenseGate.Verdict> license;
     private final BlockingQueue<Delivery> queue;
     private final Thread worker;
+    private volatile boolean closed;
     private final List<TrapRecipient> recipients = new CopyOnWriteArrayList<>();
     private final AtomicLong unmatched = new AtomicLong();
     private final AtomicLong multiMatch = new AtomicLong();
@@ -60,6 +61,7 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
 
     @Override
     public void close() {
+        closed = true;
         worker.interrupt();
         queue.clear();
     }
@@ -176,9 +178,19 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
             recipient.counters().countDroppedRateLimit();
             return;
         }
+        if (closed) {
+            return;
+        }
         if (!queue.offer(new Delivery(recipient, notification))) {
             recipient.counters().countDroppedQueueFull();
+        } else if (closed) {
+            // close() raced with the offer: nothing will drain it
+            queue.clear();
         }
+    }
+
+    int queued() {
+        return queue.size();
     }
 
     static TrapNotification parse(IncomingNotification incoming) {

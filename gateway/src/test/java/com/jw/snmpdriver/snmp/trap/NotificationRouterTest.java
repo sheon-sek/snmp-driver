@@ -390,6 +390,20 @@ class NotificationRouterTest {
     }
 
     @Test
+    void closedRouterAdmitsNothingMore() throws Exception {
+        NotificationRouter closed = new NotificationRouter(10165, () -> LicenseGate.Verdict.LICENSED, 10);
+        Device a = new Device("a", "10.0.0.1", "public");
+        closed.add(a.recipient);
+        closed.close();
+
+        closed.onNotification(fromA());
+
+        assertEquals(0, closed.queued());
+        assertEquals(0, a.counters.accepted());
+        assertEquals(0, a.counters.droppedQueueFull());
+    }
+
+    @Test
     void notificationsQueuedForARemovedDeviceAreDroppedSilently() throws Exception {
         NotificationRouter local = new NotificationRouter(10164, () -> LicenseGate.Verdict.LICENSED, 10);
         CountDownLatch gate = new CountDownLatch(1);

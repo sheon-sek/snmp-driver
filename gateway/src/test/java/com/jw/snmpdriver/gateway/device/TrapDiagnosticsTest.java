@@ -23,21 +23,25 @@ class TrapDiagnosticsTest {
     private final Map<String, String> nodes = new LinkedHashMap<>();
     private final TrapDiagnostics diagnostics = new TrapDiagnostics(nodes::put);
     private final ManualScheduler scheduler = new ManualScheduler();
+    private final List<TrapListenerRegistry> registries = new ArrayList<>();
     private int failures;
 
     @AfterEach
     void tearDown() {
+        registries.forEach(TrapListenerRegistry::closeAll);
         scheduler.shutdownNow();
     }
 
     private TrapListenerRegistry registry() {
-        return new TrapListenerRegistry((address, port) -> {
+        TrapListenerRegistry registry = new TrapListenerRegistry((address, port) -> {
             if (failures > 0) {
                 failures--;
                 throw new IOException("Address already in use");
             }
             return () -> { };
         }, scheduler);
+        registries.add(registry);
+        return registry;
     }
 
     @Test
