@@ -15,16 +15,21 @@ import java.util.concurrent.TimeUnit;
 
 import com.jw.snmpdriver.snmp.runtime.LicenseGate;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
+import com.jw.snmpdriver.snmp.trap.TrapNotification;
 import com.jw.snmpdriver.snmp.trap.TrapListenerRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 class TrapDiagnosticsTest {
-    private final Map<String, String> nodes = new LinkedHashMap<>();
+    private final Map<String, Object> nodes = new LinkedHashMap<>();
     private final TrapDiagnostics diagnostics = new TrapDiagnostics(nodes::put);
     private final ManualScheduler scheduler = new ManualScheduler();
     private final List<TrapListenerRegistry> registries = new ArrayList<>();
     private int failures;
+
+    private String text(String name) {
+        return (String) nodes.get(name);
+    }
 
     @AfterEach
     void tearDown() {
@@ -78,12 +83,12 @@ class TrapDiagnosticsTest {
         licensed.track(registry().acquire("dev-a", "0.0.0.0", 10162, licensed::refresh));
 
         assertEquals("Unlicensed", nodes.get("Status"));
-        assertTrue(nodes.get("LastError").contains("许可证"));
+        assertTrue(text("LastError").contains("许可证"));
         assertEquals("0.0.0.0:10162", nodes.get("ListenerEndpoint"));
 
         verdict.set(LicenseGate.Verdict.EXPIRED);
         licensed.refresh();
-        assertTrue(nodes.get("LastError").contains("过期"));
+        assertTrue(text("LastError").contains("过期"));
 
         verdict.set(LicenseGate.Verdict.LICENSED);
         licensed.refresh();
@@ -119,7 +124,7 @@ class TrapDiagnosticsTest {
         diagnostics.track(handle);
 
         assertEquals("Degraded", nodes.get("Status"));
-        String error = nodes.get("LastError");
+        String error = text("LastError");
         assertTrue(error.contains("Address already in use"), error);
         assertTrue(error.contains("10162") && error.contains("nftables"), error);
         assertTrue(error.contains("SNMPTRAP"), error);
@@ -140,16 +145,16 @@ class TrapDiagnosticsTest {
         diagnostics.track(rejected);
 
         assertEquals("Degraded", nodes.get("Status"));
-        assertTrue(nodes.get("LastError").contains("dev-a"), nodes.get("LastError"));
-        assertTrue(nodes.get("LastError").contains("重新保存或重新启用"), nodes.get("LastError"));
-        assertTrue(!nodes.get("LastError").contains("每 30 秒自动重试"), nodes.get("LastError"));
+        assertTrue(text("LastError").contains("dev-a"), text("LastError"));
+        assertTrue(text("LastError").contains("重新保存或重新启用"), text("LastError"));
+        assertTrue(!text("LastError").contains("每 30 秒自动重试"), text("LastError"));
         assertEquals("", nodes.get("ListenerEndpoint"));
     }
 
     @Test
     void conflictNamesOwnerAndAddressWhileFirstArrivalKeepsListeningAndRecoversAfterRelease() {
         TrapListenerRegistry registry = registry();
-        Map<String, String> firstNodes = new LinkedHashMap<>();
+        Map<String, Object> firstNodes = new LinkedHashMap<>();
         TrapDiagnostics firstDiagnostics = new TrapDiagnostics(firstNodes::put);
         TrapListenerHandle first = registry.acquire("dev-a", "0.0.0.0", 10162, firstDiagnostics::refresh);
         firstDiagnostics.track(first);
@@ -157,7 +162,7 @@ class TrapDiagnosticsTest {
         diagnostics.track(registry.acquire("dev-b", "127.0.0.1", 10162, diagnostics::refresh));
 
         assertEquals("Degraded", nodes.get("Status"));
-        String error = nodes.get("LastError");
+        String error = text("LastError");
         assertTrue(error.contains("dev-a") && error.contains("0.0.0.0"), error);
         assertTrue(error.contains("127.0.0.1"), error);
         assertEquals("Listening", firstNodes.get("Status"));
@@ -182,7 +187,7 @@ class TrapDiagnosticsTest {
 
         diagnostics.track(registry.acquire("dev-c", "127.0.0.1", 10162, diagnostics::refresh));
 
-        String error = nodes.get("LastError");
+        String error = text("LastError");
         assertTrue(error.contains("dev-b") && !error.contains("dev-a"), error);
         b.release();
     }
@@ -203,10 +208,11 @@ class TrapDiagnosticsTest {
     }
 
     @Test
-    void nodeDescriptionsStateM1aOnlyHoldsThePort() {
+    void nodeDescriptionsNoLongerClaimNotificationsAreIgnored() {
         for (String name : List.of("Status", "LastError", "ListenerEndpoint")) {
             String description = TrapDiagnostics.describe(name);
-            assertTrue(description.contains("M1a 仅占用端口，尚未处理收到的 Notification"), description);
+            assertTrue(!description.contains("M1a"), description);
+            assertTrue(description.contains("Last/Json"), description);
             assertTrue(description.contains(name), description);
         }
     }
@@ -216,7 +222,7 @@ class TrapDiagnosticsTest {
         diagnostics.showUnavailable("Trap 监听器注册表不可用");
 
         assertEquals("Degraded", nodes.get("Status"));
-        assertTrue(nodes.get("LastError").contains("注册表不可用"));
+        assertTrue(text("LastError").contains("注册表不可用"));
     }
 
     @Test
@@ -267,5 +273,80 @@ class TrapDiagnosticsTest {
             }
             ready.forEach(Runnable::run);
         }
+    }
+
+    private static TrapNotification notification(String trapOid) throws Exception {
+        return new TrapNotification(java.time.Instant.parse("2026-01-02T03:04:05Z"),
+                TrapNotification.Version.V2C, TrapNotification.PduType.INFORM,
+                java.net.InetAddress.getByName("192.0.2.7"), 40162, null, 99L, trapOid,
+                List.of(new org.snmp4j.smi.VariableBinding(org.snmp4j.mp.SnmpConstants.sysUpTime,
+                        new org.snmp4j.smi.TimeTicks(99))), false);
+    }
+
+    @Test
+    void acceptedNotificationPublishesEveryLastNodeFromOneSnapshot() throws Exception {
+        diagnostics.accept(notification("1.3.6.1.6.3.1.1.5.4"));
+        diagnostics.accept(notification("1.3.6.1.6.3.1.1.5.3"));
+
+        assertEquals(2L, nodes.get("Last/Sequence"));
+        assertEquals(java.time.Instant.parse("2026-01-02T03:04:05Z"), nodes.get("Last/ReceivedTime"));
+        assertEquals("INFORM", nodes.get("Last/PduType"));
+        assertEquals("V2C", nodes.get("Last/Version"));
+        assertEquals("1.3.6.1.6.3.1.1.5.3", nodes.get("Last/TrapOid"));
+        assertEquals("192.0.2.7:40162", nodes.get("Last/Source"));
+        assertEquals("", nodes.get("Last/AgentAddress"));
+        assertEquals(99L, nodes.get("Last/AgentUpTime"));
+        assertTrue(text("Last/Varbinds").startsWith("[{\"oid\":\"1.3.6.1.2.1.1.3.0\""));
+        assertTrue(text("Last/Json").startsWith("{\"sequence\":2,"), text("Last/Json"));
+        assertTrue(text("Last/Json").contains("\"varbinds\":" + text("Last/Varbinds")));
+    }
+
+    @Test
+    void counterNodesAreWrittenOnlyWhenTheirValueChanged() {
+        java.util.concurrent.atomic.AtomicLong received = new java.util.concurrent.atomic.AtomicLong();
+        Map<String, java.util.function.LongSupplier> sources = new LinkedHashMap<>();
+        sources.put("ReceivedCount", received::get);
+        sources.put("AcceptedCount", () -> 0L);
+        List<String> writes = new ArrayList<>();
+        TrapDiagnostics counting = new TrapDiagnostics((name, value) -> writes.add(name + "=" + value),
+                () -> LicenseGate.Verdict.LICENSED, sources);
+
+        counting.flushCounters();
+        assertEquals(List.of(), writes, "unchanged counters must not be written");
+
+        received.set(5);
+        counting.flushCounters();
+        received.set(7);
+        received.set(9);
+        counting.flushCounters();
+        counting.flushCounters();
+
+        assertEquals(List.of("ReceivedCount=5", "ReceivedCount=9"), writes);
+    }
+
+    @Test
+    void lastNodesGoBadWithoutLicenseAndComeBackWithTheirValues() throws Exception {
+        java.util.concurrent.atomic.AtomicReference<LicenseGate.Verdict> verdict =
+                new java.util.concurrent.atomic.AtomicReference<>(LicenseGate.Verdict.LICENSED);
+        TrapDiagnostics licensed = new TrapDiagnostics(nodes::put, verdict::get);
+        licensed.track(registry().acquire("dev-a", "0.0.0.0", 10162, licensed::refresh));
+        licensed.accept(notification("1.3.6.1.6.3.1.1.5.3"));
+
+        verdict.set(LicenseGate.Verdict.NOT_AVAILABLE);
+        licensed.refresh();
+        assertEquals(org.eclipse.milo.opcua.stack.core.StatusCodes.Bad_LicenseNotAvailable,
+                ((org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode) nodes.get("Last/Json")).getValue());
+        assertEquals(org.eclipse.milo.opcua.stack.core.StatusCodes.Bad_LicenseNotAvailable,
+                ((org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode) nodes.get("Last/Sequence")).getValue());
+
+        verdict.set(LicenseGate.Verdict.EXPIRED);
+        licensed.refresh();
+        assertEquals(org.eclipse.milo.opcua.stack.core.StatusCodes.Bad_LicenseExpired,
+                ((org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode) nodes.get("Last/Json")).getValue());
+
+        verdict.set(LicenseGate.Verdict.LICENSED);
+        licensed.refresh();
+        assertEquals(1L, nodes.get("Last/Sequence"));
+        assertTrue(text("Last/Json").startsWith("{\"sequence\":1,"));
     }
 }

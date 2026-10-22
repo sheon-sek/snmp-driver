@@ -161,6 +161,12 @@ public final class ServiceBundle extends AbstractBundle {
         return state == State.RUNNING;
     }
 
+    /** The shared scheduler for light periodic work (Trap counter publishing). */
+    public synchronized ScheduledExecutorService scheduler() {
+        requireRunning();
+        return scheduler;
+    }
+
     public synchronized SharedPollCoordinator runtime() {
         return ensureStarted();
     }

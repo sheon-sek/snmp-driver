@@ -29,6 +29,7 @@ dependencies {
     testCompileOnly "com.inductiveautomation.ignitionsdk:gateway-api:${ignitionVersion}"
     testRuntimeOnly "com.inductiveautomation.ignitionsdk:ignition-common:${ignitionVersion}"
     testRuntimeOnly "com.inductiveautomation.ignitionsdk:gateway-api:${ignitionVersion}"
+    testCompileOnly project(':base')
     testRuntimeOnly project(':base')
     testRuntimeOnly project(':common')
     testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.16'
