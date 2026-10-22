@@ -152,6 +152,9 @@ public final class SnmpFailureClassifier {
                     false
             );
         }
+        if (root instanceof SnmpTransportUnavailableException) {
+            return failure("transport-unavailable", root, StatusCodes.Bad_NoCommunication, false, false, false);
+        }
         if (root instanceof IOException) {
             return failure("transport", root, StatusCodes.Bad_NoCommunication, true, false, false);
         }

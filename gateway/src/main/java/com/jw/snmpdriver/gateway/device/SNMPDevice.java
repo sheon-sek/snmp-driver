@@ -51,8 +51,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     private final SubscriptionModel subscriptionModel;
     private final DeviceDiagnostics diagnostics;
 
-    private volatile String status = "Starting";
-    private volatile boolean shuttingDown;
+    private final DeviceStatusMachine statusMachine = new DeviceStatusMachine(this::publishStatus);
     private volatile DevicePollHandle pollHandle;
     private volatile SubscriptionBridge subscriptionBridge;
     private volatile DynamicAttributeReader attributeReader;
@@ -73,7 +72,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
 
     @Override
     public String getStatus() {
-        return status;
+        return statusMachine.status();
     }
 
     @Override
@@ -172,6 +171,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             TimestampsToReturn timestamps,
             List<ReadValueId> readValueIds
     ) {
+        long generation = statusMachine.currentGeneration();
         DynamicAttributeReader reader = attributeReader;
         if (reader == null) {
             return super.read(readContext, maxAge, timestamps, readValueIds);
@@ -190,7 +190,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                         failure.category(), failure.message(), error
                 );
                 diagnostics.recordLocalFailure(error, currentSnapshot());
-                handleFailure(error);
+                handleFailure(generation, error);
                 results.add(new DataValue(failure.statusCode()));
                 continue;
             }
@@ -205,6 +205,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             WriteContext writeContext,
             List<WriteValue> writeValues
     ) {
+        long generation = statusMachine.currentGeneration();
         DynamicAttributeWriter writer = attributeWriter;
         if (writer == null) {
             return super.write(writeContext, writeValues);
@@ -223,7 +224,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                         config.version(), failure.category(), failure.message(), error
                 );
                 diagnostics.recordLocalFailure(error, currentSnapshot());
-                handleFailure(error);
+                handleFailure(generation, error);
                 results.add(new StatusCode(failure.statusCode()));
                 continue;
             }
@@ -258,6 +259,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     }
 
     private void onStartup() {
+        long generation = statusMachine.beginGeneration();
         try {
             createAddressSpace();
             services.ensureStarted();
@@ -270,9 +272,9 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                     codec,
                     diagnostics,
                     getNodeManager()::containsNode,
-                    this::markRunning,
-                    this::handleFailure,
-                    this::handleActivity
+                    () -> markRunning(generation),
+                    error -> handleFailure(generation, error),
+                    snapshot -> handleActivity(generation, snapshot)
             );
             attributeReader = new DynamicAttributeReader(
                     context,
@@ -292,21 +294,22 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                     pollHandle,
                     diagnostics,
                     getNodeManager()::containsNode,
-                    this::markRunning,
-                    this::handleFailure
+                    () -> markRunning(generation),
+                    error -> handleFailure(generation, error)
             );
 
-            setStatus("Idle");
+            statusMachine.activity(generation, 0);
             List<DataItem> restoredItems =
                     context.getSubscriptionModel().getDataItems(context.getName());
             subscriptionModel.onDataItemsCreated(restoredItems);
             subscriptionBridge.restore(restoredItems);
-            handleActivity(pollHandle.snapshot());
+            handleActivity(generation, pollHandle.snapshot());
             logger.info(
                     "SNMP Device started device={} host={} port={} version={}",
                     context.getName(), config.host(), config.port(), config.version()
             );
         } catch (SecretException | SnmpConfigurationException error) {
+            statusMachine.startupFailure(generation);
             cleanupAfterStartupFailure();
             String message = error instanceof SecretException
                     ? "Failed to resolve a required SNMP credential"
@@ -333,9 +336,9 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                         failure.getMessage(), error
                 );
             }
-            setStatus("Errored");
             diagnostics.recordLocalFailure(failure, DevicePollSnapshot.empty());
         } catch (RuntimeException error) {
+            statusMachine.startupFailure(generation);
             cleanupAfterStartupFailure();
             SnmpFailureClassifier.Failure failure = SnmpFailureClassifier.classify(error);
             logger.error(
@@ -343,7 +346,6 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                     context.getName(), config.host(), config.port(), config.version(),
                     failure.category(), failure.message(), error
             );
-            setStatus("Errored");
             diagnostics.recordLocalFailure(error, DevicePollSnapshot.empty());
         }
     }
@@ -478,52 +480,37 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         }
     }
 
-    private void handleActivity(DevicePollSnapshot snapshot) {
-        diagnostics.refresh(snapshot);
-        if (shuttingDown || "Errored".equals(status)) {
+    private void handleActivity(long generation, DevicePollSnapshot snapshot) {
+        if (!statusMachine.accepts(generation)) {
             return;
         }
-        if (snapshot.activeOidCount() == 0) {
-            setStatus("Idle");
-        } else if ("Idle".equals(status) || "Starting".equals(status)) {
-            setStatus("Connecting");
-        }
+        diagnostics.refresh(snapshot);
+        statusMachine.activity(generation, snapshot.activeOidCount());
     }
 
-    private void markRunning() {
-        if (!shuttingDown && !"Errored".equals(status)) {
-            DevicePollHandle handle = pollHandle;
-            setStatus(handle != null && handle.snapshot().activeOidCount() > 0
-                    ? "Running"
-                    : "Idle");
+    private void markRunning(long generation) {
+        if (!statusMachine.accepts(generation)) {
+            return;
         }
+        statusMachine.running(generation, currentSnapshot().activeOidCount());
     }
 
     private void handleFailure(Throwable error) {
-        if (shuttingDown || "Errored".equals(status)) {
-            return;
-        }
-        SnmpFailureClassifier.Failure failure = SnmpFailureClassifier.classify(error);
-        if ("license".equals(failure.category())) {
-            setStatus("Unlicensed");
-        } else if (failure.legalResponse()) {
-            markRunning();
-        } else if (failure.circuitFailure()) {
-            setStatus("Degraded");
-        } else if ("resource".equals(failure.category())) {
-            setStatus("Degraded");
-        } else if (failure.unexpected()) {
-            setStatus("Errored");
-        }
+        handleFailure(statusMachine.currentGeneration(), error);
     }
 
-    private synchronized void setStatus(String nextStatus) {
-        String previousStatus = status;
+    private void handleFailure(long generation, Throwable error) {
+        if (!statusMachine.accepts(generation)) {
+            return;
+        }
+        statusMachine.failure(generation, error, currentSnapshot().activeOidCount());
+    }
+
+    private void publishStatus(String previousStatus, String nextStatus) {
         if (nextStatus.equals(previousStatus)) {
             diagnostics.updateStatus(nextStatus);
             return;
         }
-        status = nextStatus;
         if ("Unlicensed".equals(nextStatus)
                 || "Degraded".equals(nextStatus)
                 || "Errored".equals(nextStatus)) {
@@ -543,7 +530,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     }
 
     private void onShutdown() {
-        shuttingDown = true;
+        statusMachine.shutdown();
         attributeReader = null;
         attributeWriter = null;
         SubscriptionBridge bridge = subscriptionBridge;

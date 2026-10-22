@@ -15,15 +15,28 @@ import com.jw.snmpdriver.snmp.address.NumericOid;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.snmp4j.AbstractTarget;
 import org.snmp4j.CommunityTarget;
-import org.snmp4j.DirectUserTarget;
+import org.snmp4j.MessageDispatcher;
+import org.snmp4j.MessageDispatcherImpl;
+import org.snmp4j.MutablePDU;
 import org.snmp4j.PDU;
 import org.snmp4j.ScopedPDU;
 import org.snmp4j.Snmp;
+import org.snmp4j.Target;
+import org.snmp4j.TransportStateReference;
 import org.snmp4j.UserTarget;
+import org.snmp4j.asn1.BERInputStream;
+import org.snmp4j.asn1.BEROutputStream;
 import org.snmp4j.event.ResponseEvent;
 import org.snmp4j.event.ResponseListener;
+import org.snmp4j.mp.CounterSupport;
+import org.snmp4j.mp.MPv1;
+import org.snmp4j.mp.MPv2c;
 import org.snmp4j.mp.MPv3;
+import org.snmp4j.mp.MessageProcessingModel;
+import org.snmp4j.mp.MutableStateReference;
+import org.snmp4j.mp.PduHandle;
 import org.snmp4j.mp.SnmpConstants;
+import org.snmp4j.mp.StatusInformation;
 import org.snmp4j.security.AuthHMAC128SHA224;
 import org.snmp4j.security.AuthHMAC192SHA256;
 import org.snmp4j.security.AuthHMAC256SHA384;
@@ -37,10 +50,15 @@ import org.snmp4j.security.PrivAES256;
 import org.snmp4j.security.PrivDES;
 import org.snmp4j.security.PrivacyProtocol;
 import org.snmp4j.security.SecurityLevel;
+import org.snmp4j.security.SecurityModel;
 import org.snmp4j.security.SecurityModels;
+import org.snmp4j.security.SecurityParameters;
 import org.snmp4j.security.SecurityProtocols;
+import org.snmp4j.security.SecurityStateReference;
 import org.snmp4j.security.USM;
+import org.snmp4j.security.UsmSecurityStateReference;
 import org.snmp4j.smi.Address;
+import org.snmp4j.smi.Integer32;
 import org.snmp4j.smi.OID;
 import org.snmp4j.smi.OctetString;
 import org.snmp4j.smi.UdpAddress;
@@ -58,40 +76,225 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
     private final DefaultUdpTransportMapping ipv6Transport;
     private final Snmp snmp;
     private final SecurityProtocols securityProtocols;
+    private final LocalizedKeyCache localizedKeys = new LocalizedKeyCache();
     private final AtomicBoolean started = new AtomicBoolean();
+    private volatile boolean ipv6Available;
+    private boolean closed;
 
     public Snmp4jRequestClient(DnsResolver dnsResolver) throws IOException {
-        this.dnsResolver = dnsResolver;
-        this.ipv4Transport = new DefaultUdpTransportMapping();
-        this.ipv6Transport = new DefaultUdpTransportMapping(
-                new UdpAddress(InetAddress.getByName("::"), 0),
-                true
-        );
-        this.snmp = new Snmp(ipv4Transport);
-        this.snmp.addTransportMapping(ipv6Transport);
-        this.securityProtocols = SecurityProtocols.getInstance().addDefaultProtocols();
-        securityProtocols.addAuthenticationProtocol(new AuthMD5());
-        securityProtocols.addAuthenticationProtocol(new AuthSHA());
-        securityProtocols.addAuthenticationProtocol(new AuthHMAC128SHA224());
-        securityProtocols.addAuthenticationProtocol(new AuthHMAC192SHA256());
-        securityProtocols.addAuthenticationProtocol(new AuthHMAC256SHA384());
-        securityProtocols.addAuthenticationProtocol(new AuthHMAC384SHA512());
-        securityProtocols.addPrivacyProtocol(new PrivDES());
-        securityProtocols.addPrivacyProtocol(new PrivAES128());
-        securityProtocols.addPrivacyProtocol(new PrivAES192());
-        securityProtocols.addPrivacyProtocol(new PrivAES256());
+        this(dnsResolver, new TransportFactory() {});
+    }
 
-        byte[] localEngineId = MPv3.createLocalEngineID();
-        USM usm = new USM(securityProtocols, new OctetString(localEngineId), 0);
-        SecurityModels.getInstance().addSecurityModel(usm);
-        snmp.setLocalEngine(localEngineId, 0, 0);
+    Snmp4jRequestClient(DnsResolver dnsResolver, TransportFactory factory) throws IOException {
+        this.dnsResolver = dnsResolver;
+        DefaultUdpTransportMapping ipv4 = null;
+        DefaultUdpTransportMapping ipv6 = null;
+        Snmp client = null;
+        try {
+            this.ipv4Transport = ipv4 = factory.createIpv4();
+            try {
+                ipv6 = factory.createIpv6();
+            } catch (IOException | UnsupportedOperationException | SecurityException error) {
+                logger.warn("SNMP IPv6 transport unavailable; IPv4 remains enabled", error);
+            }
+            this.ipv6Transport = ipv6;
+            this.ipv6Available = ipv6 != null;
+            this.snmp = client = factory.createSnmp(ipv4Transport);
+            if (ipv6Transport != null) {
+                this.snmp.addTransportMapping(ipv6Transport);
+            }
+            this.securityProtocols = new SecurityProtocols(SecurityProtocols.SecurityProtocolSet.none)
+                    .addDefaultProtocols();
+            securityProtocols.addAuthenticationProtocol(new AuthMD5());
+            securityProtocols.addAuthenticationProtocol(new AuthSHA());
+            securityProtocols.addAuthenticationProtocol(new AuthHMAC128SHA224());
+            securityProtocols.addAuthenticationProtocol(new AuthHMAC192SHA256());
+            securityProtocols.addAuthenticationProtocol(new AuthHMAC256SHA384());
+            securityProtocols.addAuthenticationProtocol(new AuthHMAC384SHA512());
+            securityProtocols.addPrivacyProtocol(new PrivDES());
+            securityProtocols.addPrivacyProtocol(new PrivAES128());
+            securityProtocols.addPrivacyProtocol(new PrivAES192());
+            securityProtocols.addPrivacyProtocol(new PrivAES256());
+
+            byte[] localEngineId = MPv3.createLocalEngineID();
+            USM usm = new USM(securityProtocols, new OctetString(localEngineId), 0) {
+                @Override
+                public SecurityStateReference newSecurityStateReference() {
+                    return new GenerationSecurityState();
+                }
+            };
+            SecurityModels securityModels = new SecurityModels().addSecurityModel(usm);
+            var dispatcher = snmp.getMessageDispatcher();
+            dispatcher.addMessageProcessingModel(new MPv1());
+            dispatcher.addMessageProcessingModel(new MPv2c());
+            dispatcher.addMessageProcessingModel(new KeyAwareMPv3(localEngineId, securityProtocols, securityModels, localizedKeys));
+            snmp.setLocalEngine(localEngineId, 0, 0);
+        } catch (IOException | RuntimeException | Error error) {
+            closeResources(client, ipv4, ipv6, error);
+            throw error;
+        }
+    }
+
+    private static void closeResources(
+            Snmp client,
+            DefaultUdpTransportMapping ipv4,
+            DefaultUdpTransportMapping ipv6,
+            Throwable failure
+    ) {
+        // Snmp.close stops at the first mapping exception, before releasing its timer and dispatcher.
+        // Detach mappings so each socket and the session receive an independent cleanup attempt.
+        if (client != null) {
+            if (ipv4 != null) {
+                closeAfterFailure(() -> client.removeTransportMapping(ipv4), failure);
+            }
+            if (ipv6 != null) {
+                closeAfterFailure(() -> client.removeTransportMapping(ipv6), failure);
+            }
+        }
+        closeAfterFailure(ipv4, failure);
+        closeAfterFailure(ipv6, failure);
+        closeAfterFailure(client, failure);
+    }
+
+    private static void closeAfterFailure(AutoCloseable resource, Throwable failure) {
+        if (resource != null) {
+            try {
+                resource.close();
+            } catch (Exception cleanupError) {
+                failure.addSuppressed(cleanupError);
+            }
+        }
+    }
+
+    interface TransportFactory {
+        default DefaultUdpTransportMapping createIpv4() throws IOException {
+            return new DefaultUdpTransportMapping();
+        }
+
+        default DefaultUdpTransportMapping createIpv6() throws IOException {
+            return new DefaultUdpTransportMapping(new UdpAddress(InetAddress.getByName("::"), 0));
+        }
+
+        default Snmp createSnmp(DefaultUdpTransportMapping ipv4) throws IOException {
+            // The convenience constructor installs global security protocols and an MPv3 using global models.
+            // Return an unconfigured dispatcher so the client can install its own models before listening.
+            return new Snmp(new MessageDispatcherImpl() {
+                @Override
+                protected void configureAuthoritativeEngineID(Target<?> target, MessageProcessingModel model) {
+                    // An in-flight target must never write its old engine back over a freshly received REPORT.
+                    // KeyAwareMPv3 selects the actual engine and its keys together when encoding each attempt.
+                    if (!(target instanceof LocalizedKeyCache.CachedTarget)) {
+                        super.configureAuthoritativeEngineID(target, model);
+                    }
+                }
+            }, ipv4);
+        }
+    }
+
+    private static final class KeyAwareMPv3 extends MPv3 {
+        private final LocalizedKeyCache keys;
+
+        KeyAwareMPv3(byte[] engineId, SecurityProtocols protocols, SecurityModels models, LocalizedKeyCache keys) {
+            super(engineId, null, protocols, models, CounterSupport.getInstance());
+            this.keys = keys;
+        }
+
+        @Override
+        public synchronized <A extends Address> int prepareDataElements(
+                MessageDispatcher dispatcher, A address, BERInputStream message, TransportStateReference transport,
+                Integer32 model, Integer32 securityModel, OctetString name, Integer32 level, MutablePDU pdu,
+                PduHandle handle, Integer32 maxSize, StatusInformation status, MutableStateReference<A> state) {
+            synchronized (keys) {
+                // Generation activation cannot interleave between the stale-response check and MPv3's engine write.
+                return super.prepareDataElements(dispatcher, address, message, transport, model, securityModel,
+                        name, level, pdu, handle, maxSize, status, state);
+            }
+        }
+
+        @Override
+        public int extractScopedPDU(BERInputStream message, SecurityModel model, TransportStateReference transport,
+                                   HeaderData header, Integer32 level, Integer32 maxSize, StatusInformation status,
+                                   OctetString name, OctetString engine, Integer32 version, SecurityParameters parameters,
+                                   BEROutputStream scoped, SecurityStateReference state) throws IOException {
+            // This polling client only accepts replies owned by a current request. After timeout MPv3
+            // creates a fresh state with no endpoint; reject it before USM or MPv3 can learn an engine.
+            if (!(state instanceof GenerationSecurityState generation) || generation.endpoint == null
+                    || !keys.isCurrent(generation.endpoint)) {
+                return SnmpConstants.SNMP_MP_MATCH_ERROR;
+            }
+            return super.extractScopedPDU(message, model, transport, header, level, maxSize, status,
+                    name, engine, version, parameters, scoped, state);
+        }
+
+        @Override
+        public synchronized boolean addEngineID(Address address, OctetString engineId) {
+            return super.addEngineID(address, engineId);
+        }
+
+        @Override
+        public synchronized OctetString removeEngineID(Address address) {
+            return super.removeEngineID(address);
+        }
+
+        @Override
+        public synchronized <A extends Address> int prepareOutgoingMessage(
+                A address, int maxMessageSize, int model, int securityModel, byte[] securityName,
+                int securityLevel, PDU pdu, boolean expectResponse, PduHandle handle,
+                BEROutputStream message, TransportStateReference state) throws IOException {
+            if (state.getTarget() instanceof LocalizedKeyCache.CachedTarget target) {
+                OctetString actual = getEngineID(address);
+                OctetString previous = new OctetString(target.getAuthoritativeEngineID());
+                byte[] engineId = actual == null ? new byte[0] : actual.getValue();
+                target.setAuthoritativeEngineID(engineId);
+                if (pdu instanceof ScopedPDU scoped && scoped.getContextEngineID().equals(previous)) {
+                    scoped.setContextEngineID(new OctetString(engineId));
+                }
+            }
+            // Pin the engine snapshot through key selection and encoding, including internal REPORT retries.
+            return super.prepareOutgoingMessage(address, maxMessageSize, model, securityModel, securityName,
+                    securityLevel, pdu, expectResponse, handle, message, state);
+        }
+    }
+
+    private static final class GenerationSecurityState extends UsmSecurityStateReference {
+        private SnmpEndpoint endpoint;
+
+        @Override
+        public boolean applyTargetSecurityInformation(Target<?> target) {
+            boolean applied = super.applyTargetSecurityInformation(target);
+            if (target instanceof LocalizedKeyCache.CachedTarget cached) {
+                endpoint = cached.endpoint();
+            }
+            return applied;
+        }
     }
 
     @Override
-    public void start() throws IOException {
-        if (started.compareAndSet(false, true)) {
-            snmp.listen();
-            logger.info("Shared SNMP UDP transport started");
+    public synchronized void start() throws IOException {
+        if (closed) {
+            throw new IllegalStateException("SNMP transport is closed");
+        }
+        if (!started.get()) {
+            try {
+                ipv4Transport.listen();
+                if (ipv6Available) {
+                    try {
+                        ipv6Transport.listen();
+                    } catch (IOException | UnsupportedOperationException | SecurityException error) {
+                        ipv6Available = false;
+                        snmp.removeTransportMapping(ipv6Transport);
+                        closeAfterFailure(ipv6Transport, error);
+                        logger.warn("SNMP IPv6 listener unavailable; IPv4 remains enabled", error);
+                    }
+                }
+                snmp.listen();
+                started.set(true);
+                logger.info("Shared SNMP UDP transport started");
+            } catch (IOException | RuntimeException | Error error) {
+                closed = true;
+                closeResources(snmp, ipv4Transport, ipv6Transport, error);
+                throw error;
+            }
         }
     }
 
@@ -106,7 +309,10 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
         if (oids == null || oids.isEmpty()) {
             return CompletableFuture.failedFuture(new IllegalArgumentException("SNMP GET batch cannot be empty"));
         }
-        return dnsResolver.resolve(endpoint)
+        if (endpoint.version() == SNMPDeviceConfig.Version.V3) {
+            localizedKeys.activate(endpoint);
+        }
+        return dnsResolver.resolve(endpoint, ipv6Available)
                 .thenCompose(address -> sendGet(endpoint, List.copyOf(oids), address));
     }
 
@@ -119,7 +325,10 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
         if (!started.get()) {
             return CompletableFuture.failedFuture(new IllegalStateException("SNMP transport is not started"));
         }
-        return dnsResolver.resolve(endpoint)
+        if (endpoint.version() == SNMPDeviceConfig.Version.V3) {
+            localizedKeys.activate(endpoint);
+        }
+        return dnsResolver.resolve(endpoint, ipv6Available)
                 .thenCompose(address -> sendSet(endpoint, oid, value, address));
     }
 
@@ -139,6 +348,7 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
             public <A extends Address> void onResponse(ResponseEvent<A> event) {
                 try {
                     cancelRequest(event, this, endpoint, "GET");
+                    invalidateFailedAttempt(event, target);
                     completeGet(future, event, endpoint, target);
                 } catch (RuntimeException error) {
                     future.completeExceptionally(error);
@@ -175,6 +385,7 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
             public <A extends Address> void onResponse(ResponseEvent<A> event) {
                 try {
                     cancelRequest(event, this, endpoint, "SET");
+                    invalidateFailedAttempt(event, target);
                     completeSet(future, event, endpoint, target, oid);
                 } catch (RuntimeException error) {
                     future.completeExceptionally(error);
@@ -192,6 +403,29 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
             future.completeExceptionally(error);
         }
         return future;
+    }
+
+    private void invalidateFailedAttempt(ResponseEvent<?> event, AbstractTarget<UdpAddress> target) {
+        if (!(target instanceof LocalizedKeyCache.CachedTarget cached)) {
+            return;
+        }
+        PDU response = event.getResponse();
+        boolean securityReport = response != null && response.getType() == PDU.REPORT && response.size() > 0
+                && isSecurityReportOid(response.get(0).getOid());
+        if (response != null && !securityReport) {
+            return;
+        }
+        MPv3 model = (MPv3) snmp.getMessageProcessingModel(MPv3.ID);
+        synchronized (model) {
+            synchronized (localizedKeys) {
+                OctetString current = model.getEngineID(target.getAddress());
+                if (current != null && current.equals(cached.attemptedEngine()) && localizedKeys.invalidate(cached)) {
+                    // A silent replacement can discard REPORTs. The next poll must rediscover after a timeout too.
+                    // Keep the USM time table intact; rediscovery must not bypass replay protection.
+                    model.removeEngineID(target.getAddress());
+                }
+            }
+        }
     }
 
     private <A extends Address> void cancelRequest(
@@ -352,14 +586,7 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
         if (endpoint.version() == SNMPDeviceConfig.Version.V3) {
             AuthenticationProtocol auth = authenticationProtocol(endpoint);
             PrivacyProtocol privacy = privacyProtocol(endpoint);
-            DirectUserTarget<UdpAddress> userTarget = new DirectUserTarget<>(
-                    address,
-                    new OctetString(endpoint.securityName()),
-                    auth,
-                    endpoint.authPassphrase().isEmpty() ? null : new OctetString(endpoint.authPassphrase()),
-                    privacy,
-                    endpoint.privacyPassphrase().isEmpty() ? null : new OctetString(endpoint.privacyPassphrase())
-            );
+            var userTarget = localizedKeys.target(endpoint, address, auth, privacy);
             userTarget.setVersion(SnmpConstants.version3);
             userTarget.setSecurityLevel(securityLevel(endpoint.securityLevel()));
             target = userTarget;
@@ -649,12 +876,16 @@ public final class Snmp4jRequestClient implements SnmpRequestClient {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         started.set(false);
-        try {
-            snmp.close();
-        } catch (IOException error) {
-            logger.warn("Failed to close shared SNMP transport", error);
+        localizedKeys.close();
+        if (!closed) {
+            closed = true;
+            IOException failure = new IOException("Failed to close shared SNMP transport");
+            closeResources(snmp, ipv4Transport, ipv6Transport, failure);
+            if (failure.getSuppressed().length != 0) {
+                logger.warn(failure.getMessage(), failure);
+            }
         }
     }
 }

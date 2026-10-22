@@ -25,6 +25,21 @@ public final class DnsResolver implements AutoCloseable {
     private static final long TTL_NANOS = TimeUnit.MINUTES.toNanos(5);
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
 
+    private final HostLookup hostLookup;
+
+    public DnsResolver() {
+        this(InetAddress::getAllByName);
+    }
+
+    DnsResolver(HostLookup hostLookup) {
+        this.hostLookup = hostLookup;
+    }
+
+    @FunctionalInterface
+    interface HostLookup {
+        InetAddress[] lookup(String host) throws UnknownHostException;
+    }
+
     private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor executor = new ThreadPoolExecutor(
             2,
@@ -40,8 +55,8 @@ public final class DnsResolver implements AutoCloseable {
             new ThreadPoolExecutor.AbortPolicy()
     );
 
-    public CompletionStage<UdpAddress> resolve(SnmpEndpoint endpoint) {
-        String key = endpoint.ipFamily() + ":" + endpoint.host() + ":" + endpoint.port();
+    CompletionStage<UdpAddress> resolve(SnmpEndpoint endpoint, boolean ipv6Available) {
+        String key = ipv6Available + ":" + endpoint.ipFamily() + ":" + endpoint.host() + ":" + endpoint.port();
         long now = System.nanoTime();
         CacheEntry cached = cache.get(key);
         if (cached != null && cached.expiresAtNanos() > now) {
@@ -49,7 +64,7 @@ public final class DnsResolver implements AutoCloseable {
         }
 
         try {
-            return CompletableFuture.supplyAsync(() -> resolveAddress(endpoint), executor)
+            return CompletableFuture.supplyAsync(() -> resolveAddress(endpoint, ipv6Available), executor)
                     .orTimeout(2, TimeUnit.SECONDS)
                     .thenApply(address -> {
                         evictExpiredAndBound(System.nanoTime());
@@ -67,10 +82,20 @@ public final class DnsResolver implements AutoCloseable {
         }
     }
 
-    private UdpAddress resolveAddress(SnmpEndpoint endpoint) {
+    private UdpAddress resolveAddress(SnmpEndpoint endpoint, boolean ipv6Available) {
         try {
-            InetAddress address = Arrays.stream(InetAddress.getAllByName(endpoint.host()))
+            InetAddress[] candidates = hostLookup.lookup(endpoint.host());
+            if (!ipv6Available && (endpoint.ipFamily() == SNMPDeviceConfig.IpFamily.IPV6
+                    || (endpoint.ipFamily() == SNMPDeviceConfig.IpFamily.AUTO
+                    && Arrays.stream(candidates).noneMatch(Inet4Address.class::isInstance)
+                    && Arrays.stream(candidates).anyMatch(Inet6Address.class::isInstance)))) {
+                throw new SnmpTransportUnavailableException("SNMP IPv6 transport is unavailable host=" + endpoint.host()
+                        + " ipFamily=" + endpoint.ipFamily()
+                        + "; enable IPv6 on the Gateway host or configure an IPv4 destination");
+            }
+            InetAddress address = Arrays.stream(candidates)
                     .filter(candidate -> matchesFamily(endpoint.ipFamily(), candidate))
+                    .filter(candidate -> ipv6Available || candidate instanceof Inet4Address)
                     .findFirst()
                     .orElseThrow(() -> new UnknownHostException("No address matches requested IP family"));
             return new UdpAddress(address, endpoint.port());
