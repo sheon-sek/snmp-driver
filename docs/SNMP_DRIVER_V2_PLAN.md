@@ -54,6 +54,9 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 | Q22 | 1.0.0 升级兼容：覆写 `decode(JsonElement)`，仅为缺失的 `trap*` 字段补默认值，显式非法值保留交给 `validate`；不使用 `customizeGson`。 | §4.8 |
 | Q23 | listener 以端口为键，第一个 acquirer 的 bindAddress 定义该 listener，bindAddress 不一致的后来者被拒绝并 Degraded；`trapPort` 默认保持 162；表单 Label 与 Linux 端口提示列为 M1a 验收项。 | §4.2、§4.8、§4.10 |
 | Q18 | agent 只更新 Markdown（Feature List、README），另写 docs/USER_MANUAL_1.1.0_CHANGES.md 列出 .docx 手册需改内容，.docx 由人工更新。 | §4.12、§5.1（M1d 交付物） |
+| Q24 | Last/* 一致读取契约：新增单值 `Traps/Last/Json`（含 sequence 与全部 Last 字段），现有 `Last/*` 保留为非原子镜像；`TRAP.*` 不做每 OID 快照。 | §4.7；`docs/adr/0008-last-json-consistent-read.md` |
+| Q25 | M1b 每个 Trap Listener 一个队列加一个 worker；流水线纯逻辑放 `snmp/trap`，自有 `CommandResponder`；Inform 命中多设备时至少一个入队即 ACK，去重先查询后写入（入队成功后）；Degraded 优先于 Unlicensed；出队时设备已删除或换代则静默丢弃；256 OID 满后不淘汰，订阅路径可占预留槽位。 | §4.5、§4.7、§4.9；ADR 0004 补充 |
+| Q26 | M1b 先做半天 spike 验证 JUnit 假 `DeviceContext`，再拆 5 个 ticket：接收骨架、准入控制、Inform、节点与接线、`TRAP.*` 路径；`SNMPDevice` 接线端到端测试用 JUnit 加 igdev 冒烟。 | §5 |
 
 ### 1.2 ADR
 
@@ -66,6 +69,7 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 - `docs/adr/0005-trap-port-policy.md`：Trap 端口默认 162，绑定失败只降级 Trap 功能（D4）
 - `docs/adr/0006-defer-mib-parsing.md`：推迟 MIB 解析，未来首选离线字典（D3）
 - `docs/adr/0007-cross-device-validation-runtime-first.md`：跨设备冲突以运行期复查为准（Q19）
+- `docs/adr/0008-last-json-consistent-read.md`：用单值 `Traps/Last/Json` 作为 Last 的一致读取契约（Q24）
 
 知识库中的 ADR 草稿（`draft` / `agent_access: deny`，等待人工审批）只作为副本，各自注明对应的仓库 ADR：
 
@@ -325,10 +329,10 @@ Notification 只归属已配置的 Device，不提供 Gateway 级「接收任意
   1. 认证（由 MPv3/USM 完成，或 community 比较）
   2. 路由（至少命中一个设备）
   3. License 检查（§4.9）
-  4. 每设备 token bucket 限速
-  5. Inform 去重
+  4. Inform 去重**查询**（命中则再 ACK，不扣令牌，计 `DuplicateInformCount`）
+  5. 每设备 token bucket 限速
   6. `queue.offer`（不阻塞）
-  7. 入队成功后才 ACK
+  7. 入队成功后写入去重记录，然后 ACK；命中多个设备时至少一个入队成功即 ACK（Q25，ADR 0004 补充）
 - 任一步失败：**不 ACK**，计入对应的丢弃计数，发送方会按自身策略重发。
 - **语义**（Q9，`docs/adr/0004-inform-ack-after-in-memory-enqueue.md`）：ACK 表示「Gateway 已接受进入内存队列」，**不保证持久化**；进程崩溃时队列中的 Inform 会丢失，手册写明。不承诺 exactly-once。
 - **去重**：键为（源地址:端口、版本、community 摘要或 securityName + engineID、contextName、requestID），TTL 60 s，最多 4096 项（LRU）。重复的 Inform **再 ACK 一次**（发送方可能没收到上次的 ACK），但不重复计数、不更新 Tag，只计 `DuplicateInformCount`。
@@ -380,8 +384,9 @@ Notification 只归属已配置的 Device，不提供 Gateway 级「接收任意
 | `Last/AgentAddress` | String | 仅 v1 |
 | `Last/AgentUpTime` | UInt32 | `sysUpTime.0` 的 TimeTicks 原值 |
 | `Last/Varbinds` | String | JSON 有序数组 `[{"oid","type","value"}]`，最大 16 KiB，超出时截断并加 `"truncated":true` |
+| `Last/Json` | String | 单值一致快照，含 `sequence` 与上述全部字段；需要一致读取时读它（Q24，ADR 0008） |
 
-- **一致性**：`Last/*` 为非原子镜像，相同 sourceTime 不提供跨节点事务或通知顺序保证。撤回单纯 Sequence 双读保证一致性的算法。M1b 编码前需确定一致读取契约，候选为一个 Read 请求固定一次不可变 Snapshot 引用，或新增包含 Sequence 的单值快照；这些候选尚未批准，不视为新增节点承诺。跨多次 Read 仍可能看到不同快照。现有 Sequence 每条加一与 Q2 快照语义不变。见调查记录 §4。
+- **一致性**：`Last/*` 为非原子镜像，相同 sourceTime 不提供跨节点事务或通知顺序保证。撤回单纯 Sequence 双读保证一致性的算法。一致读取契约已定（Q24，ADR 0008）：新增单值节点 `Last/Json`（`sequence`、`receivedTime`、`pduType`、`version`、`trapOid`、`source`、`agentAddress`、`agentUpTime`、`varbinds`，整体一次发布，16 KiB 截断规则同 `Last/Varbinds`）；现有 `Last/*` 保留为非原子镜像，`TRAP.*` 路径不做每 OID 快照。跨多个节点读取仍可能看到不同快照。现有 Sequence 每条加一与 Q2 快照语义不变。见调查记录 §4。
 - **动态路径（有界，Q10 保留）**：在 `ItemPathParser` 中，访问前缀 `TRAP` 走独立分支（当前 `:41-48` 遇到非 RO/RW 前缀会报错，扩展时不影响既有语法）：
   - `TRAP.Count/<trapOID>`（UInt64）
   - `TRAP.LastTime/<trapOID>`（DateTime）
