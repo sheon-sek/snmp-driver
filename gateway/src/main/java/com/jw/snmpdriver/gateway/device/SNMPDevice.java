@@ -416,7 +416,8 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                 community.getBytes(StandardCharsets.UTF_8), InetAddress::getAllByName);
         // nothing consumes accepted Notifications until the Traps/Last nodes land (#28)
         return new TrapRecipient(context.getName(), filter, new TrapCounters(),
-                new TokenBucket(config.trapRateLimitPerSecond()), notification -> { }, trapDiagnostics::notice);
+                new TokenBucket(config.trapRateLimitPerSecond()), notification -> { }, trapDiagnostics::notice,
+                config.trapAcceptInform());
     }
 
     private void releaseTrapListener() {

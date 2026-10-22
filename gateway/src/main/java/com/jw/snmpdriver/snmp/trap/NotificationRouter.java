@@ -10,6 +10,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import com.jw.snmpdriver.snmp.runtime.LicenseGate;
@@ -41,12 +42,19 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
     private final AtomicLong unmatched = new AtomicLong();
     private final AtomicLong multiMatch = new AtomicLong();
     private final Map<InetAddress, UnmatchedLog> unmatchedLog = new ConcurrentHashMap<>();
+    private final Map<TrapRecipient, InformDeduplicator> deduplicators = new ConcurrentHashMap<>();
+    private final LongSupplier nanos;
 
     NotificationRouter(int port, Supplier<LicenseGate.Verdict> license) {
         this(port, license, QUEUE_CAPACITY);
     }
 
     NotificationRouter(int port, Supplier<LicenseGate.Verdict> license, int queueCapacity) {
+        this(port, license, queueCapacity, System::nanoTime);
+    }
+
+    NotificationRouter(int port, Supplier<LicenseGate.Verdict> license, int queueCapacity, LongSupplier nanos) {
+        this.nanos = nanos;
         this.port = port;
         this.license = license;
         this.queue = new ArrayBlockingQueue<>(queueCapacity);
@@ -96,10 +104,12 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
 
     void remove(TrapRecipient recipient) {
         recipients.remove(recipient);
+        deduplicators.remove(recipient);
     }
 
     void clear() {
         recipients.clear();
+        deduplicators.clear();
     }
 
     long unmatchedCount() {
@@ -140,6 +150,7 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
         }
         TrapNotification notification = null;
         boolean parsed = false;
+        boolean acknowledge = false;
         for (TrapRecipient recipient : matched) {
             try {
                 if (!recipient.filter().authenticate(incoming.community())) {
@@ -159,34 +170,72 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
                     return;
                 }
                 recipient.counters().countReceived();
-                admit(recipient, notification);
+                if (incoming.ack() == null) {
+                    admit(recipient, notification);
+                } else if (recipient.acceptInform()) {
+                    acknowledge |= admitInform(recipient, incoming, notification);
+                }
             } catch (RuntimeException error) {
                 // one Device's failing callback must not stop the broadcast to the others
                 logger.warn("Failed to deliver Notification device={} port={} source={} category=trap",
                         recipient.deviceName(), port, incoming.source(), error);
             }
         }
+        if (acknowledge) {
+            incoming.ack().run();
+        }
     }
 
-    /** License, then the Device's rate limit, then the shared queue; every refusal has its own counter. */
+    /**
+     * Inform: ACK once if any Device queued it or already had it. The dedup lookup precedes the rate limit
+     * (a retransmission costs no token) and the write follows the offer, so an Inform that failed to queue is
+     * never mistaken for a duplicate when the sender retries (ADR 0004).
+     */
+    private boolean admitInform(TrapRecipient recipient, IncomingNotification incoming, TrapNotification notification) {
+        if (license.get() != LicenseGate.Verdict.LICENSED) {
+            recipient.counters().countDroppedUnlicensed();
+            return false;
+        }
+        InformDeduplicator deduplicator = deduplicators.computeIfAbsent(recipient, key -> new InformDeduplicator(nanos));
+        InformDeduplicator.Key key = new InformDeduplicator.Key(incoming.source(), incoming.sourcePort(),
+                incoming.version(), incoming.community(), "", incoming.pdu().getRequestID().getValue());
+        if (deduplicator.contains(key)) {
+            recipient.counters().countDuplicateInform();
+            return true;
+        }
+        if (!enqueue(recipient, notification)) {
+            return false;
+        }
+        deduplicator.record(key);
+        return true;
+    }
+
     private void admit(TrapRecipient recipient, TrapNotification notification) {
         if (license.get() != LicenseGate.Verdict.LICENSED) {
             recipient.counters().countDroppedUnlicensed();
             return;
         }
+        enqueue(recipient, notification);
+    }
+
+    /** The Device's rate limit, then the shared queue; every refusal has its own counter. */
+    private boolean enqueue(TrapRecipient recipient, TrapNotification notification) {
         if (!recipient.limiter().tryAcquire()) {
             recipient.counters().countDroppedRateLimit();
-            return;
+            return false;
         }
         if (closed) {
-            return;
+            return false;
         }
         if (!queue.offer(new Delivery(recipient, notification))) {
             recipient.counters().countDroppedQueueFull();
-        } else if (closed) {
+            return false;
+        }
+        if (closed) {
             // close() raced with the offer: nothing will drain it
             queue.clear();
         }
+        return true;
     }
 
     int queued() {

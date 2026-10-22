@@ -66,7 +66,7 @@ class NotificationRouterTest {
 
         Device(String name, String host, String community) {
             recipient = new TrapRecipient(name, new TrapFilter(host, "", bytes(community), NO_DNS),
-                    counters, new TokenBucket(1000), received::add, notices::add);
+                    counters, new TokenBucket(1000), received::add, notices::add, true);
         }
     }
 
@@ -89,7 +89,7 @@ class NotificationRouterTest {
 
     private IncomingNotification incoming(String source, String community, PDU pdu,
                                           TrapNotification.Version version) throws Exception {
-        return new IncomingNotification(ip(source), 40000, version, bytes(community), pdu);
+        return new IncomingNotification(ip(source), 40000, version, bytes(community), pdu, null);
     }
 
     @Test
@@ -240,7 +240,7 @@ class NotificationRouterTest {
         TrapRecipient bad = new TrapRecipient("bad", new TrapFilter("10.0.0.1", "", bytes("public"), NO_DNS),
                 new TrapCounters(), new TokenBucket(1000), n -> {
                     throw new IllegalStateException("boom");
-                }, s -> { });
+                }, s -> { }, true);
         router.add(bad);
 
         route(incoming("10.0.0.1", "public",
@@ -252,7 +252,7 @@ class NotificationRouterTest {
         TrapRecipient bad = new TrapRecipient("bad", new TrapFilter("10.0.0.1", "", bytes("public"), NO_DNS),
                 new TrapCounters(), new TokenBucket(1000), n -> {
                     throw new IllegalStateException("boom");
-                }, s -> { });
+                }, s -> { }, true);
         Device good = new Device("good", "10.0.0.1", "public");
         router.add(bad);
         router.add(good.recipient);
@@ -269,7 +269,7 @@ class NotificationRouterTest {
         TrapRecipient bad = new TrapRecipient("bad", new TrapFilter("10.0.0.1", "", bytes("other"), NO_DNS),
                 new TrapCounters(), new TokenBucket(1000), n -> { }, s -> {
                     throw new IllegalStateException("boom");
-                });
+                }, true);
         Device good = new Device("good", "10.0.0.1", "public");
         router.add(bad);
         router.add(good.recipient);
@@ -337,7 +337,7 @@ class NotificationRouterTest {
         TrapCounters limitedCounters = new TrapCounters();
         List<TrapNotification> limitedReceived = new CopyOnWriteArrayList<>();
         router.add(new TrapRecipient("limited", new TrapFilter("10.0.0.3", "", bytes("public"), NO_DNS),
-                limitedCounters, new TokenBucket(2, () -> clock[0]), limitedReceived::add, s -> { }));
+                limitedCounters, new TokenBucket(2, () -> clock[0]), limitedReceived::add, s -> { }, true));
         Device free = new Device("free", "10.0.0.4", "public");
         router.add(free.recipient);
 
@@ -370,7 +370,7 @@ class NotificationRouterTest {
                         Thread.currentThread().interrupt();
                     }
                     delivered.add(n);
-                }, s -> { }));
+                }, s -> { }, true));
         tiny.start();
         try {
             long start = System.nanoTime();
@@ -417,9 +417,9 @@ class NotificationRouterTest {
                     } catch (InterruptedException error) {
                         Thread.currentThread().interrupt();
                     }
-                }, s -> { });
+                }, s -> { }, true);
         TrapRecipient gone = new TrapRecipient("gone", new TrapFilter("10.0.0.1", "", bytes("public"), NO_DNS),
-                stale, new TokenBucket(1000), staleReceived::add, s -> { });
+                stale, new TokenBucket(1000), staleReceived::add, s -> { }, true);
         local.add(blocker);
         local.add(gone);
         local.start();

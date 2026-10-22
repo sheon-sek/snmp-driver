@@ -54,7 +54,7 @@ class TrapReceiveTest {
 
     private static TrapRecipient recipient(BlockingQueue<TrapNotification> sink, TrapCounters counters) {
         return new TrapRecipient("dev", new TrapFilter("127.0.0.1", "", "public".getBytes(StandardCharsets.UTF_8),
-                InetAddress::getAllByName), counters, new TokenBucket(1000), sink::add, notice -> { });
+                InetAddress::getAllByName), counters, new TokenBucket(1000), sink::add, notice -> { }, true);
     }
 
     private static void send(int port, int version, String community, PDU pdu) throws Exception {
