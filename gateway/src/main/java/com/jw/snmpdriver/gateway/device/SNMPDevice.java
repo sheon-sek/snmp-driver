@@ -302,7 +302,8 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                     getNodeManager()::containsNode,
                     () -> markRunning(generation),
                     error -> handleFailure(generation, error),
-                    snapshot -> handleActivity(generation, snapshot)
+                    snapshot -> handleActivity(generation, snapshot),
+                    trapDiagnostics
             );
             attributeReader = new DynamicAttributeReader(
                     context,
@@ -312,7 +313,8 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                     pollHandle,
                     diagnostics,
                     getNodeManager()::containsNode,
-                    config.accessMode()
+                    config.accessMode(),
+                    trapDiagnostics
             );
             attributeWriter = new DynamicAttributeWriter(
                     context,

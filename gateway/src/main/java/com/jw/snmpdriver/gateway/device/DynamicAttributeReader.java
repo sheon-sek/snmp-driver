@@ -9,6 +9,7 @@ import java.util.function.Predicate;
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
 import com.jw.snmpdriver.snmp.address.AddressResolver;
 import com.jw.snmpdriver.snmp.address.ResolvedAddress;
+import com.jw.snmpdriver.snmp.address.TrapItemPath;
 import com.jw.snmpdriver.snmp.runtime.DevicePollHandle;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueException;
 import org.eclipse.milo.opcua.sdk.core.AccessLevel;
@@ -36,6 +37,7 @@ public final class DynamicAttributeReader {
     private final DeviceDiagnostics diagnostics;
     private final Predicate<NodeId> isRealNode;
     private final SNMPDeviceConfig.AccessMode accessMode;
+    private final TrapDiagnostics traps;
     private final Map<NodeId, FailureLogState> reportedFailures = new ConcurrentHashMap<>();
 
     public DynamicAttributeReader(
@@ -48,6 +50,20 @@ public final class DynamicAttributeReader {
             Predicate<NodeId> isRealNode,
             SNMPDeviceConfig.AccessMode accessMode
     ) {
+        this(context, config, resolver, subscriptions, pollHandle, diagnostics, isRealNode, accessMode, null);
+    }
+
+    public DynamicAttributeReader(
+            DeviceContext context,
+            SNMPDeviceConfig config,
+            AddressResolver resolver,
+            SubscriptionBridge subscriptions,
+            DevicePollHandle pollHandle,
+            DeviceDiagnostics diagnostics,
+            Predicate<NodeId> isRealNode,
+            SNMPDeviceConfig.AccessMode accessMode,
+            TrapDiagnostics traps
+    ) {
         this.context = context;
         this.config = config;
         this.resolver = resolver;
@@ -56,6 +72,7 @@ public final class DynamicAttributeReader {
         this.diagnostics = diagnostics;
         this.isRealNode = isRealNode;
         this.accessMode = accessMode;
+        this.traps = traps;
     }
 
     public Optional<DataValue> read(ReadValueId readValueId) {
@@ -91,6 +108,11 @@ public final class DynamicAttributeReader {
 
         ResolvedAddress address;
         try {
+            Optional<TrapItemPath> trapPath = traps == null ? Optional.empty() : resolver.resolveTrap(itemPath);
+            if (trapPath.isPresent()) {
+                reportedFailures.remove(nodeId);
+                return Optional.of(readTrapLeaf(nodeId, trapPath.get(), attribute.get()));
+            }
             address = resolver.resolve(itemPath);
         } catch (IllegalArgumentException error) {
             return Optional.of(reject(
@@ -112,6 +134,25 @@ public final class DynamicAttributeReader {
         }
         reportedFailures.remove(nodeId);
         return Optional.of(readLeaf(nodeId, address, attribute.get()));
+    }
+
+    /** TRAP.* is answered from the per-trapOID state; it never reaches the poll handle or SNMP GET. */
+    private DataValue readTrapLeaf(NodeId nodeId, TrapItemPath path, AttributeId attribute) {
+        return switch (attribute) {
+            case NodeId -> value(nodeId);
+            case NodeClass -> value(NodeClass.Variable);
+            case BrowseName -> value(context.qualifiedName(path.canonical()));
+            case DisplayName -> value(LocalizedText.english(path.canonical()));
+            case Description -> value(LocalizedText.english(
+                    "Notification state of trapOID " + path.trapOid().canonical() + ". "
+                            + TrapDiagnostics.TRAP_PATH_NOTE));
+            case DataType -> value(path.field().dataType());
+            case ValueRank -> value(ValueRanks.Scalar);
+            case AccessLevel, UserAccessLevel -> value(AccessLevel.toValue(AccessLevel.READ_ONLY));
+            case MinimumSamplingInterval -> value(-1.0d);
+            case Value -> traps.readTrapPath(path);
+            default -> bad(StatusCodes.Bad_AttributeIdInvalid);
+        };
     }
 
     private DataValue readLeaf(NodeId nodeId, ResolvedAddress address, AttributeId attribute) {
