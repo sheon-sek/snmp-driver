@@ -20,6 +20,8 @@ import com.jw.snmpdriver.snmp.runtime.SnmpEndpoint;
 import com.jw.snmpdriver.snmp.runtime.SnmpFailureClassifier;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueCodec;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueException;
+import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
+import com.jw.snmpdriver.snmp.trap.TrapListenerRegistry;
 import org.eclipse.milo.opcua.sdk.core.Reference;
 import org.eclipse.milo.opcua.sdk.server.AddressSpace.ReadContext;
 import org.eclipse.milo.opcua.sdk.server.AddressSpace.RevisedDataItemParameters;
@@ -50,9 +52,11 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     private final SnmpValueCodec codec = new SnmpValueCodec();
     private final SubscriptionModel subscriptionModel;
     private final DeviceDiagnostics diagnostics;
+    private final TrapDiagnostics trapDiagnostics;
 
     private final DeviceStatusMachine statusMachine = new DeviceStatusMachine(this::publishStatus);
     private volatile DevicePollHandle pollHandle;
+    private volatile TrapListenerHandle trapHandle;
     private volatile SubscriptionBridge subscriptionBridge;
     private volatile DynamicAttributeReader attributeReader;
     private volatile DynamicAttributeWriter attributeWriter;
@@ -64,6 +68,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         this.services = services;
         this.subscriptionModel = new SubscriptionModel(context.getServer(), this);
         this.diagnostics = new DeviceDiagnostics(this, context);
+        this.trapDiagnostics = TrapDiagnostics.forNodes(this, context);
 
         getLifecycleManager().addLifecycle(subscriptionModel);
         getLifecycleManager().addStartupTask(this::onStartup);
@@ -263,6 +268,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         try {
             createAddressSpace();
             services.ensureStarted();
+            acquireTrapListener();
             pollHandle = createPollHandle();
             subscriptionBridge = new SubscriptionBridge(
                     context,
@@ -365,6 +371,51 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                 Reference.Direction.INVERSE
         ));
         diagnostics.createUnder(root);
+        trapDiagnostics.createUnder(root);
+    }
+
+    /** Trap failures only degrade the Traps nodes; they never touch Device Status or polling. */
+    private void acquireTrapListener() {
+        if (!config.trapEnabled()) {
+            trapDiagnostics.showDisabled();
+            return;
+        }
+        try {
+            Optional<TrapListenerRegistry> registry = services.trapRegistry();
+            if (registry.isEmpty()) {
+                trapDiagnostics.showUnavailable("Trap 监听器注册表不可用，Trap 接收已停用。");
+                return;
+            }
+            TrapListenerHandle handle = registry.get().acquire(
+                    context.getName(), config.trapBindAddress(), config.trapPort(),
+                    trapDiagnostics::refresh);
+            trapHandle = handle;
+            trapDiagnostics.track(handle);
+        } catch (RuntimeException error) {
+            logger.warn(
+                    "Failed to acquire Trap listener device={} bindAddress={} port={} category=trap",
+                    context.getName(), config.trapBindAddress(), config.trapPort(), error
+            );
+            trapDiagnostics.showUnavailable("获取 Trap 监听器失败：" + error);
+        }
+    }
+
+    private void releaseTrapListener() {
+        TrapListenerHandle handle = trapHandle;
+        trapHandle = null;
+        if (handle != null) {
+            try {
+                handle.release();
+            } catch (RuntimeException error) {
+                logger.warn(
+                        "Failed to release Trap listener device={} host={} port={} version={} category=shutdown",
+                        context.getName(), config.host(), config.port(), config.version(), error
+                );
+            }
+        }
+        if (config.trapEnabled()) {
+            trapDiagnostics.released();
+        }
     }
 
     private DevicePollHandle createPollHandle() throws SecretException {
@@ -531,6 +582,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
 
     private void onShutdown() {
         statusMachine.shutdown();
+        releaseTrapListener();
         attributeReader = null;
         attributeWriter = null;
         SubscriptionBridge bridge = subscriptionBridge;
@@ -572,6 +624,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     }
 
     private void cleanupAfterStartupFailure() {
+        releaseTrapListener();
         attributeReader = null;
         attributeWriter = null;
         SubscriptionBridge bridge = subscriptionBridge;

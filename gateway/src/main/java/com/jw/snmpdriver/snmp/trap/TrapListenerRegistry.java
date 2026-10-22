@@ -42,7 +42,13 @@ public final class TrapListenerRegistry {
         }
     }
 
-    public synchronized TrapListenerHandle acquire(String deviceName, String bindAddress, int port) {
+    public TrapListenerHandle acquire(String deviceName, String bindAddress, int port) {
+        return acquire(deviceName, bindAddress, port, null);
+    }
+
+    /** {@code onChange} runs after a background bind retry settles, until the handle is released. */
+    public synchronized TrapListenerHandle acquire(
+            String deviceName, String bindAddress, int port, Runnable onChange) {
         InetAddress address = parseLiteral(bindAddress);
         if (address == null) {
             return rejected("设备 " + deviceName + " 的 Trap bindAddress \"" + bindAddress + "\" 不是 IP 字面量");
@@ -58,7 +64,10 @@ public final class TrapListenerRegistry {
                     + " 请求的 bindAddress " + address.getHostAddress() + " 不一致");
         }
         listener.refCount++;
-        return new TrapListenerHandle(this, listener, null);
+        if (onChange != null) {
+            listener.watchers.add(onChange);
+        }
+        return new TrapListenerHandle(this, listener, null, onChange);
     }
 
     public synchronized void closeAll() {
@@ -68,7 +77,10 @@ public final class TrapListenerRegistry {
         listeners.clear();
     }
 
-    synchronized void release(Listener listener) {
+    synchronized void release(Listener listener, Runnable onChange) {
+        if (onChange != null) {
+            listener.watchers.remove(onChange);
+        }
         if (listeners.get(listener.port) != listener || --listener.refCount > 0) {
             return;
         }
@@ -85,7 +97,7 @@ public final class TrapListenerRegistry {
     }
 
     private TrapListenerHandle rejected(String reason) {
-        return new TrapListenerHandle(this, null, reason);
+        return new TrapListenerHandle(this, null, reason, null);
     }
 
     private void tryBind(Listener listener) {
@@ -108,12 +120,24 @@ public final class TrapListenerRegistry {
         }
     }
 
-    private synchronized void retry(Listener listener) {
-        if (listener.state != TrapListenerState.FAILED || listener.refCount == 0
-                || listeners.get(listener.port) != listener) {
-            return;
+    private void retry(Listener listener) {
+        List<Runnable> watchers;
+        synchronized (this) {
+            if (listener.state != TrapListenerState.FAILED || listener.refCount == 0
+                    || listeners.get(listener.port) != listener) {
+                return;
+            }
+            tryBind(listener);
+            watchers = new ArrayList<>(listener.watchers);
         }
-        tryBind(listener);
+        // outside the registry lock so watchers may read handle state freely
+        for (Runnable watcher : watchers) {
+            try {
+                watcher.run();
+            } catch (RuntimeException ignored) {
+                // a failing watcher must not stop the others
+            }
+        }
     }
 
     private void close(Listener listener) {
@@ -152,6 +176,7 @@ public final class TrapListenerRegistry {
         String lastError;
         Closeable bound;
         ScheduledFuture<?> retry;
+        final List<Runnable> watchers = new ArrayList<>();
 
         Listener(int port, InetAddress address, String owner) {
             this.port = port;

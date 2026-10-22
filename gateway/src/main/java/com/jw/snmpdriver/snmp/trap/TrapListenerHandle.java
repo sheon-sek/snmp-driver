@@ -5,12 +5,15 @@ public final class TrapListenerHandle {
     private final TrapListenerRegistry registry;
     private final TrapListenerRegistry.Listener listener;
     private final String rejection;
+    private final Runnable onChange;
     private boolean released;
 
-    TrapListenerHandle(TrapListenerRegistry registry, TrapListenerRegistry.Listener listener, String rejection) {
+    TrapListenerHandle(TrapListenerRegistry registry, TrapListenerRegistry.Listener listener, String rejection,
+                       Runnable onChange) {
         this.registry = registry;
         this.listener = listener;
         this.rejection = rejection;
+        this.onChange = onChange;
     }
 
     public boolean isRejected() {
@@ -41,6 +44,6 @@ public final class TrapListenerHandle {
             return;
         }
         released = true;
-        registry.release(listener);
+        registry.release(listener, onChange);
     }
 }

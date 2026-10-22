@@ -82,6 +82,27 @@ class TrapListenerRegistryTest {
     }
 
     @Test
+    void retryOutcomeNotifiesWatchersUntilReleased() throws Exception {
+        FakeBinder binder = new FakeBinder();
+        binder.failures = 1;
+        TrapListenerRegistry registry = new TrapListenerRegistry(binder, scheduler);
+        int[] changes = new int[1];
+
+        TrapListenerHandle handle = registry.acquire("dev-a", "0.0.0.0", 10162, () -> changes[0]++);
+        assertEquals(TrapListenerState.FAILED, handle.state());
+        assertEquals(0, changes[0], "首次 bind 结果由 acquire 调用方直接读取，不回调");
+
+        scheduler.runPending();
+        assertEquals(TrapListenerState.BOUND, handle.state());
+        assertEquals(1, changes[0]);
+
+        TrapListenerHandle other = registry.acquire("dev-b", "0.0.0.0", 10162);
+        handle.release();
+        other.release();
+        assertEquals(1, changes[0]);
+    }
+
+    @Test
     void releasingLastReferenceCancelsRetry() throws Exception {
         FakeBinder binder = new FakeBinder();
         binder.failures = 100;
