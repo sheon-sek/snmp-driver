@@ -29,6 +29,9 @@ public final class TrapDiagnostics {
             + "Windows 上请检查系统 SNMPTRAP 服务是否占用了 UDP 162（停用该服务或改用其他端口）；"
             + "也可能是端口已被其他进程占用，Gateway 每 30 秒自动重试。";
 
+    private static final String REJECTED_NOTE = "处置建议：修正冲突设备的 Trap 配置或停用冲突设备后，"
+            + "重新保存或重新启用本设备以再次申请监听（被拒绝的申请不会自动重试）。";
+
     private static final String M1A_NOTE = "M1a 仅占用端口，尚未处理收到的 Notification";
 
     private static final Logger logger = LoggerFactory.getLogger(TrapDiagnostics.class);
@@ -102,7 +105,7 @@ public final class TrapDiagnostics {
             return;
         }
         if (current.isRejected()) {
-            publish(Status.DEGRADED, current.rejection() + " " + REMEDIATION, "");
+            publish(Status.DEGRADED, current.rejection() + " " + REJECTED_NOTE, "");
             return;
         }
         String endpoint = current.endpoint() == null ? "" : current.endpoint();

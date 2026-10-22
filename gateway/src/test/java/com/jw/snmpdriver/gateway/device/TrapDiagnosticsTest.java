@@ -89,6 +89,8 @@ class TrapDiagnosticsTest {
 
         assertEquals("Degraded", nodes.get("Status"));
         assertTrue(nodes.get("LastError").contains("dev-a"), nodes.get("LastError"));
+        assertTrue(nodes.get("LastError").contains("重新保存或重新启用"), nodes.get("LastError"));
+        assertTrue(!nodes.get("LastError").contains("每 30 秒自动重试"), nodes.get("LastError"));
         assertEquals("", nodes.get("ListenerEndpoint"));
     }
 
@@ -170,6 +172,7 @@ class TrapDiagnosticsTest {
         TrapListenerHandle handle = registry().acquire("dev-a", "0.0.0.0", 10162, diagnostics::refresh);
         diagnostics.track(handle);
 
+        handle.release();
         diagnostics.released();
 
         assertEquals("Disabled", nodes.get("Status"));
