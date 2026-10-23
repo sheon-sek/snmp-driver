@@ -55,7 +55,7 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 | Q23 | listener 以端口为键，第一个 acquirer 的 bindAddress 定义该 listener，bindAddress 不一致的后来者被拒绝并 Degraded；`trapPort` 默认保持 162；表单 Label 与 Linux 端口提示列为 M1a 验收项。 | §4.2、§4.8、§4.10 |
 | Q18 | agent 只更新 Markdown（Feature List、README），另写 docs/USER_MANUAL_1.1.0_CHANGES.md 列出 .docx 手册需改内容，.docx 由人工更新。 | §4.12、§5.1（M1d 交付物） |
 | Q24 | Last/* 一致读取契约：新增单值 `Traps/Last/Json`（含 sequence 与全部 Last 字段），现有 `Last/*` 保留为非原子镜像；`TRAP.*` 不做每 OID 快照。 | §4.7；`docs/adr/0008-last-json-consistent-read.md` |
-| Q25 | M1b 每个 Trap Listener 一个队列加一个 worker；流水线纯逻辑放 `snmp/trap`，自有 `CommandResponder`；Inform 命中多设备时至少一个入队即 ACK，去重先查询后写入（入队成功后）；Degraded 优先于 Unlicensed；出队时设备已删除或换代则静默丢弃；256 OID 满后不淘汰，订阅路径可占预留槽位。 | §4.5、§4.7、§4.9；ADR 0004 补充 |
+| Q25 | M1b 每个 Trap Listener 一个队列加一个 worker；流水线纯逻辑放 `snmp/trap`，自有 `CommandResponder`；Inform 命中多设备时至少一个入队即 ACK，去重先查询后写入（入队成功后）；Degraded 优先于 Unlicensed；出队时设备已删除或换代则静默丢弃；256 OID 满后不淘汰，其中 16 个槽位只给已订阅路径（无订阅时上限 240）。 | §4.5、§4.7、§4.9；ADR 0004 补充 |
 | Q26 | M1b 先做半天 spike 验证 JUnit 假 `DeviceContext`，再拆 5 个 ticket：接收骨架、准入控制、Inform、节点与接线、`TRAP.*` 路径；`SNMPDevice` 接线端到端测试用 JUnit 加 igdev 冒烟。 | §5 |
 
 ### 1.2 ADR
@@ -393,7 +393,7 @@ Notification 只归属已配置的 Device，不提供 Gateway 级「接收任意
   - `TRAP.LastVarbinds/<trapOID>`（String JSON）
   - `TRAP.Sequence/<trapOID>`（UInt64）
 
-  这些路径只读，**不触发 SNMP GET**，也不受 1000 ms 轮询下限约束；SubscriptionBridge 识别 `TRAP.` 前缀后改为订阅 TrapState 并在 Trap 到达时推送。每个设备最多跟踪 256 个 trapOID；已被订阅的 OID 优先保留；超出上限计入 `Traps/OverflowCount`，未跟踪的 OID 读到 `Count=0` 且质量为 Good。不提供 `TRAP/<oid>/<varbind>` 路径（避免类型歧义和无界 NodeId）。
+  这些路径只读，**不触发 SNMP GET**，也不受 1000 ms 轮询下限约束；SubscriptionBridge 识别 `TRAP.` 前缀后改为订阅 TrapState 并在 Trap 到达时推送。每个设备最多跟踪 256 个 trapOID，其中 16 个预留给已被 Tag 订阅的 `TRAP.*` 路径（因此无订阅时最多跟踪 240 个）；已跟踪的 OID 不淘汰；超出上限计入 `Traps/OverflowCount`，未跟踪的 OID 读到 `Count=0` 且质量为 Good。不提供 `TRAP/<oid>/<varbind>` 路径（避免类型歧义和无界 NodeId）。
 - **Alarm 指引**：在 `Last/Sequence` 或 `TRAP.Count/<oid>` 上用 Expression/脚本判断「值变化」，同时说明它的局限。不承诺一条 Trap 对应一条报警，也不给出未经实际验证的 Alarm 配置作为契约。
 
 ### 4.8 配置字段（`SNMPDeviceConfig` 新增 `TRAP` 分类）
