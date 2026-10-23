@@ -442,7 +442,9 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             boolean encrypted = config.securityLevel() == SNMPDeviceConfig.SecurityLevel.AUTH_PRIV;
             TrapV3User user = TrapV3User.of(config.securityName(), config.securityLevel(), config.authProtocol(),
                     authenticated ? secret(config.authPassphrase()) : null, config.privacyProtocol(),
-                    encrypted ? secret(config.privacyPassphrase()) : null, config.trapSenderEngineId());
+                    encrypted ? secret(config.privacyPassphrase()) : null, config.trapSenderEngineId(),
+                    credentialRef(authenticated ? config.authPassphrase() : null,
+                            encrypted ? config.privacyPassphrase() : null));
             TrapFilter filter = new TrapFilter(config.host(), config.trapSourceAllowlist(), new byte[0],
                     InetAddress::getAllByName);
             return new TrapRecipient(context.getName(), filter, trapCounters,
@@ -584,6 +586,21 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             throw new SnmpConfigurationException(field + " must contain at least 8 characters");
         }
         return value;
+    }
+
+    /** Referenced SecretConfigs by provider/name; embedded ones are compared by plaintext only (#37). */
+    static String credentialRef(SecretConfig auth, SecretConfig privacy) {
+        String authRef = referenceOf(auth);
+        String privacyRef = referenceOf(privacy);
+        return authRef == null && privacyRef == null ? null : authRef + "|" + privacyRef;
+    }
+
+    private static String referenceOf(SecretConfig secretConfig) {
+        if (secretConfig == null || !secretConfig.isReferenced()) {
+            return null;
+        }
+        SecretConfig.Referenced referenced = secretConfig.getAsReferenced();
+        return referenced.getProviderName() + "/" + referenced.getSecretName();
     }
 
     private String secret(SecretConfig secretConfig) throws SecretException {

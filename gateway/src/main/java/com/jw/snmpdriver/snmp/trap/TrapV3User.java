@@ -1,7 +1,9 @@
 package com.jw.snmpdriver.snmp.trap;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.Objects;
 
 import com.jw.snmpdriver.gateway.device.SNMPDeviceConfig;
 import org.snmp4j.security.AuthHMAC128SHA224;
@@ -20,7 +22,8 @@ import org.snmp4j.smi.OID;
 /**
  * A Device's USM user on the Trap stack. {@code senderEngineId} is the v3 Trap sender's authoritative engine
  * (ADR 0003); null means this Device receives no v3 Trap. Protocols and passphrases are null below the level
- * that needs them.
+ * that needs them. {@code credentialRef} identifies the referenced SecretConfigs the passphrases came from; null
+ * when they are embedded or absent, so only their plaintext is compared (#37).
  */
 public record TrapV3User(
         String securityName,
@@ -29,8 +32,15 @@ public record TrapV3User(
         byte[] authPassphrase,
         OID privacyProtocol,
         byte[] privacyPassphrase,
-        byte[] senderEngineId
+        byte[] senderEngineId,
+        String credentialRef
 ) {
+    public TrapV3User(String securityName, int securityLevel, OID authProtocol, byte[] authPassphrase,
+                      OID privacyProtocol, byte[] privacyPassphrase, byte[] senderEngineId) {
+        this(securityName, securityLevel, authProtocol, authPassphrase, privacyProtocol, privacyPassphrase,
+                senderEngineId, null);
+    }
+
     /** Traps/LastError while a USM Device has no sender engineID (ADR 0003). */
     public static final String NO_SENDER_ENGINE_ID = "未配置 Trap Sender Engine ID，不接收 v3 Trap。请在设备上读取 "
             + "snmpEngineID.0（1.3.6.1.6.3.10.2.1.1.0）并填入 Trap Sender Engine ID。";
@@ -39,6 +49,13 @@ public record TrapV3User(
                                 SNMPDeviceConfig.AuthProtocol auth, String authPassphrase,
                                 SNMPDeviceConfig.PrivacyProtocol privacy, String privacyPassphrase,
                                 String senderEngineHex) {
+        return of(securityName, level, auth, authPassphrase, privacy, privacyPassphrase, senderEngineHex, null);
+    }
+
+    public static TrapV3User of(String securityName, SNMPDeviceConfig.SecurityLevel level,
+                                SNMPDeviceConfig.AuthProtocol auth, String authPassphrase,
+                                SNMPDeviceConfig.PrivacyProtocol privacy, String privacyPassphrase,
+                                String senderEngineHex, String credentialRef) {
         int snmpLevel = switch (level) {
             case NO_AUTH_NO_PRIV -> SecurityLevel.NOAUTH_NOPRIV;
             case AUTH_NO_PRIV -> SecurityLevel.AUTH_NOPRIV;
@@ -50,7 +67,20 @@ public record TrapV3User(
                 authenticated ? authOid(auth) : null, authenticated ? bytes(authPassphrase) : null,
                 encrypted ? privOid(privacy) : null, encrypted ? bytes(privacyPassphrase) : null,
                 senderEngineHex == null || senderEngineHex.isBlank()
-                        ? null : HexFormat.of().parseHex(senderEngineHex.trim()));
+                        ? null : HexFormat.of().parseHex(senderEngineHex.trim()), credentialRef);
+    }
+
+    /**
+     * Whether a same-named user on the same Listener could share this one's USM entry: same SecretConfig
+     * references, level, protocols and plaintext. The sender engine is not compared.
+     */
+    public boolean sameCredentials(TrapV3User other) {
+        return securityLevel == other.securityLevel
+                && Objects.equals(credentialRef, other.credentialRef)
+                && Objects.equals(authProtocol, other.authProtocol)
+                && Arrays.equals(authPassphrase, other.authPassphrase)
+                && Objects.equals(privacyProtocol, other.privacyProtocol)
+                && Arrays.equals(privacyPassphrase, other.privacyPassphrase);
     }
 
     public boolean receivesTraps() {

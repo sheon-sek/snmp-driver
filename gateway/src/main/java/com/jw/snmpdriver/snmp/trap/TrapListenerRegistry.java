@@ -6,10 +6,15 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -94,8 +99,17 @@ public final class TrapListenerRegistry {
     }
 
     /** A non-null {@code recipient} also receives the Notifications whose source belongs to it. */
-    public synchronized TrapListenerHandle acquire(
+    public TrapListenerHandle acquire(
             String deviceName, String bindAddress, int port, Runnable onChange, TrapRecipient recipient) {
+        List<Runnable> changed = new ArrayList<>();
+        TrapListenerHandle handle = acquireLocked(deviceName, bindAddress, port, onChange, recipient, changed);
+        runAll(changed);
+        return handle;
+    }
+
+    private synchronized TrapListenerHandle acquireLocked(String deviceName, String bindAddress, int port,
+                                                          Runnable onChange, TrapRecipient recipient,
+                                                          List<Runnable> changed) {
         InetAddress address = parseIpLiteral(bindAddress);
         if (address == null) {
             return rejected("设备 " + deviceName + " 的 Trap bindAddress \"" + bindAddress + "\" 不是 IP 字面量");
@@ -119,13 +133,9 @@ public final class TrapListenerRegistry {
         }
         if (recipient != null) {
             if (recipient.v3User() != null) {
-                // the user is localized now, never on the fly for whatever engineID a packet claims (ADR 0003)
-                try {
-                    listener.usm.register(recipient.v3User());
-                } catch (IllegalArgumentException error) {
-                    // validate bounds engineID length; anything else must not leave the listener half-acquired
-                    recipient.notice().accept("无法注册 v3 Trap 用户：" + error.getMessage());
-                }
+                listener.v3Recipients.put(recipient, onChange);
+                reconcileV3(listener, changed);
+                changed.remove(onChange); // the acquirer reads the result from its handle
             }
             listener.router.add(recipient);
             startResolver();
@@ -187,12 +197,19 @@ public final class TrapListenerRegistry {
         }
     }
 
-    synchronized void release(Listener listener, String deviceName, Runnable onChange,
-                              TrapRecipient recipient) {
+    void release(Listener listener, String deviceName, Runnable onChange, TrapRecipient recipient) {
+        List<Runnable> changed = new ArrayList<>();
+        releaseLocked(listener, deviceName, onChange, recipient, changed);
+        runAll(changed);
+    }
+
+    private synchronized void releaseLocked(Listener listener, String deviceName, Runnable onChange,
+                                            TrapRecipient recipient, List<Runnable> changed) {
         if (recipient != null) {
             listener.router.remove(recipient);
-            if (recipient.v3User() != null) {
-                listener.usm.unregister(recipient.v3User());
+            if (listener.v3Recipients.remove(recipient) != null || recipient.v3User() != null) {
+                listener.conflicts.remove(recipient);
+                reconcileV3(listener, changed);
             }
             ScheduledFuture<?> refresh = listener.refreshes.remove(recipient);
             if (refresh != null) {
@@ -208,6 +225,86 @@ public final class TrapListenerRegistry {
         }
         listeners.remove(listener.port);
         close(listener);
+    }
+
+    /**
+     * Same-named USM users on one Listener authenticate before routing, so they must share SecretConfig
+     * references, protocols and plaintext (#37, ADR 0007). Every Device of a mismatched name is Degraded and
+     * left out of USM, so the outcome never depends on start order; the rest are registered. Watchers of
+     * Devices whose conflict changed are collected into {@code changed}.
+     */
+    private void reconcileV3(Listener listener, List<Runnable> changed) {
+        Map<String, List<TrapRecipient>> byName = new LinkedHashMap<>();
+        for (TrapRecipient recipient : listener.v3Recipients.keySet()) {
+            byName.computeIfAbsent(recipient.v3User().securityName(), name -> new ArrayList<>()).add(recipient);
+        }
+        Set<TrapRecipient> wanted = new HashSet<>();
+        for (Map.Entry<String, List<TrapRecipient>> group : byName.entrySet()) {
+            List<TrapRecipient> members = group.getValue();
+            TrapV3User first = members.get(0).v3User();
+            boolean mismatch = members.stream().anyMatch(member -> !member.v3User().sameCredentials(first));
+            for (TrapRecipient member : members) {
+                String conflict = mismatch ? conflictText(listener, group.getKey(), member, members) : null;
+                String previous = conflict == null
+                        ? listener.conflicts.remove(member) : listener.conflicts.put(member, conflict);
+                if (!Objects.equals(previous, conflict)) {
+                    Runnable watcher = listener.v3Recipients.get(member);
+                    if (watcher != null) {
+                        changed.add(watcher);
+                    }
+                }
+                if (!mismatch) {
+                    wanted.add(member);
+                }
+            }
+        }
+        for (TrapRecipient registered : new ArrayList<>(listener.v3Registered)) {
+            if (!wanted.contains(registered)) {
+                listener.v3Registered.remove(registered);
+                listener.usm.unregister(registered.v3User());
+            }
+        }
+        for (TrapRecipient recipient : wanted) {
+            if (listener.v3Registered.contains(recipient)) {
+                continue;
+            }
+            // the user is localized now, never on the fly for whatever engineID a packet claims (ADR 0003)
+            try {
+                listener.usm.register(recipient.v3User());
+                listener.v3Registered.add(recipient);
+            } catch (IllegalArgumentException error) {
+                // validate bounds engineID length; anything else must not leave the listener half-acquired
+                recipient.notice().accept("无法注册 v3 Trap 用户：" + error.getMessage());
+            }
+        }
+    }
+
+    private static String conflictText(Listener listener, String securityName, TrapRecipient self,
+                                       List<TrapRecipient> members) {
+        Set<String> others = new TreeSet<>();
+        for (TrapRecipient member : members) {
+            if (member != self) {
+                others.add(member.deviceName());
+            }
+        }
+        return "Trap Listener " + listener.endpoint() + " 上 securityName \"" + securityName + "\" 与设备 "
+                + String.join("、", others) + " 的 SecretConfig 引用、协议或口令不一致，这些设备均不接收 v3 "
+                + "Trap/Inform。请统一同名用户的配置。";
+    }
+
+    /** Null when the recipient has no securityName conflict on its Listener. */
+    String conflictOf(Listener listener, TrapRecipient recipient) {
+        return recipient == null ? null : listener.conflicts.get(recipient);
+    }
+
+    private static void runAll(List<Runnable> watchers) {
+        for (Runnable watcher : watchers) {
+            try {
+                watcher.run();
+            } catch (RuntimeException ignored) {
+                // a failing watcher must not stop the others
+            }
+        }
     }
 
     // Lock-free on purpose: the transport thread reads these while close() holds the registry lock
@@ -412,6 +509,11 @@ public final class TrapListenerRegistry {
         final NotificationRouter router;
         final Map<TrapRecipient, ScheduledFuture<?>> refreshes = new HashMap<>();
         final TrapUsmStack usm;
+        /** USM recipients and their watchers; registry lock. */
+        final Map<TrapRecipient, Runnable> v3Recipients = new LinkedHashMap<>();
+        final Set<TrapRecipient> v3Registered = new HashSet<>();
+        /** Read lock-free by diagnostics. */
+        final Map<TrapRecipient, String> conflicts = new ConcurrentHashMap<>();
 
         Listener(int port, InetAddress address, Supplier<LicenseGate.Verdict> license, TrapUsmStack usm) {
             this.port = port;
