@@ -1,6 +1,8 @@
 package com.jw.snmpdriver.gateway.service;
 
 import java.io.IOException;
+import java.nio.file.Path;
+import java.time.Clock;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,6 +16,8 @@ import com.inductiveautomation.ignition.gateway.model.GatewayContext;
 import com.inductiveautomation.ignition.gateway.opcua.server.api.Device;
 import com.jw.ignition.common.license.ModuleLicenseRuntime;
 import com.jw.ignition.common.service.AbstractBundle;
+import com.jw.ignition.license.service.MachineIdentifierMatcher;
+import com.jw.ignition.license.service.MachineInfoService;
 import com.jw.snmpdriver.common.ModuleConstants;
 import com.jw.snmpdriver.snmp.runtime.CallbackExecutor;
 import com.jw.snmpdriver.snmp.runtime.DnsResolver;
@@ -23,7 +27,9 @@ import com.jw.snmpdriver.snmp.runtime.SharedPollCoordinator;
 import com.jw.snmpdriver.snmp.runtime.Snmp4jRequestClient;
 import com.jw.snmpdriver.snmp.runtime.SnmpRequestClient;
 import com.jw.snmpdriver.snmp.trap.Snmp4jListenerBinder;
+import com.jw.snmpdriver.snmp.trap.TrapEngineIdentity;
 import com.jw.snmpdriver.snmp.trap.TrapListenerRegistry;
+import org.snmp4j.mp.MPv3;
 
 public final class ServiceBundle extends AbstractBundle {
     private static final AtomicInteger POLL_THREAD_ID = new AtomicInteger();
@@ -125,7 +131,8 @@ public final class ServiceBundle extends AbstractBundle {
             requestClient.start();
             runtime.start();
             trapRegistry = TrapListenerRegistry.tryCreate(
-                    () -> new TrapListenerRegistry(new Snmp4jListenerBinder(), scheduler, licenseGate::check),
+                    () -> new TrapListenerRegistry(new Snmp4jListenerBinder(), scheduler, licenseGate::check,
+                            loadTrapEngineIdentity()),
                     error -> logger.error("Failed to create Trap listener registry; Trap is unavailable", error)
             );
             state = State.RUNNING;
@@ -136,6 +143,21 @@ public final class ServiceBundle extends AbstractBundle {
             state = State.SET_UP;
             logger.error("Failed to start shared SNMP runtime", error);
             throw new IllegalStateException("Failed to start shared SNMP runtime", error);
+        }
+    }
+
+    /** Once per registry: boots+1 is written here, before any Trap listener binds (plan §4.6, ADR 0009). */
+    private TrapEngineIdentity loadTrapEngineIdentity() {
+        try {
+            Path file = context.getSystemManager().getModuleConfigLocalDir(ModuleConstants.MODULE_ID)
+                    .resolve(TrapEngineIdentity.FILE_NAME);
+            return TrapEngineIdentity.load(file,
+                    () -> MachineIdentifierMatcher.hashesByKey(new MachineInfoService().collect().hashedMachineInfo),
+                    MPv3::createLocalEngineID, Clock.systemUTC());
+        } catch (RuntimeException error) {
+            logger.warn("Failed to locate the Trap engine identity file; v3 Inform is disabled", error);
+            return TrapEngineIdentity.unpersisted(MPv3.createLocalEngineID(),
+                    "无法定位 Trap 本地引擎身份文件（" + error + "），v3 Inform 已停用；v1/v2c 接收不受影响。");
         }
     }
 

@@ -395,6 +395,8 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                 Reference.Direction.INVERSE
         ));
         diagnostics.createUnder(root);
+        services.trapRegistry().flatMap(TrapListenerRegistry::engineIdentity).ifPresent(identity ->
+                trapDiagnostics.showEngineIdentity(identity.engineIdHex(), identity.notice()));
         trapDiagnostics.createUnder(root);
     }
 

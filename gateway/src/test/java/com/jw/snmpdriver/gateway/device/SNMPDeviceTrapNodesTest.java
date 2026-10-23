@@ -86,6 +86,18 @@ class SNMPDeviceTrapNodesTest {
         for (String name : LAST) {
             assertTrue(fixture.read("Last/" + name).getStatusCode().isGood(), name);
         }
+        assertTrue(((String) fixture.value("LocalEngineId")).matches("[0-9a-f]{10,64}"));
+    }
+
+    @Test
+    void localEngineIdExistsWithTrapDisabledAndMatchesTheIdentityFile() throws Exception {
+        fixture = new SNMPDeviceFixture(false, "public", true);
+
+        java.util.Properties stored = new java.util.Properties();
+        try (var reader = java.nio.file.Files.newBufferedReader(fixture.engineIdentityFile())) {
+            stored.load(reader);
+        }
+        assertEquals(stored.getProperty("engineId"), fixture.value("LocalEngineId"));
     }
 
     @Test

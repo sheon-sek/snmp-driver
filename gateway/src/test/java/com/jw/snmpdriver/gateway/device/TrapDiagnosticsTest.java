@@ -402,4 +402,25 @@ class TrapDiagnosticsTest {
         assertEquals("", nodes.get("Last/Json"));
         assertTrue(licensed.readTrapPath(COUNT_PATH).getStatusCode().isGood());
     }
+
+    @Test
+    void localEngineIdIsShownAndItsNoticeSurvivesStatusChanges() {
+        diagnostics.showEngineIdentity("80001f01", "检测到 Gateway 被克隆");
+        assertEquals("80001f01", nodes.get("LocalEngineId"));
+
+        diagnostics.showDisabled();
+        assertEquals("检测到 Gateway 被克隆", nodes.get("LastError"));
+
+        diagnostics.showUnsupported("USM 不支持");
+        assertEquals("USM 不支持 检测到 Gateway 被克隆", nodes.get("LastError"));
+    }
+
+    @Test
+    void localEngineIdWithoutNoticeLeavesLastErrorEmpty() {
+        diagnostics.showEngineIdentity("80001f01", null);
+        diagnostics.showDisabled();
+
+        assertEquals("80001f01", nodes.get("LocalEngineId"));
+        assertEquals("", nodes.get("LastError"));
+    }
 }
