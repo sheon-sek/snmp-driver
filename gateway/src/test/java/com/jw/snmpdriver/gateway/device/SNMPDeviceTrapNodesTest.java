@@ -67,7 +67,8 @@ class SNMPDeviceTrapNodesTest {
     }
 
     private static boolean sequenceIs(SNMPDeviceFixture f, long expected) {
-        return Unsigned.ulong(expected).equals(f.value("Last/Sequence"));
+        // Last/Json is written last, so once it carries the sequence every mirror node is in place
+        return f.value("Last/Json") instanceof String json && json.startsWith("{\"sequence\":" + expected + ",");
     }
 
     @Test

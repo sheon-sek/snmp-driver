@@ -73,7 +73,9 @@ class SNMPDeviceTrapPathsTest {
     }
 
     private void awaitSequence(long sequence) throws Exception {
-        await("Sequence " + sequence, () -> Unsigned.ulong(sequence).equals(fixture.value("Last/Sequence")));
+        // Last/Json is written last, so once it carries the sequence every mirror node is in place
+        await("Sequence " + sequence, () -> fixture.value("Last/Json") instanceof String json
+                && json.startsWith("{\"sequence\":" + sequence + ","));
     }
 
     @Test
