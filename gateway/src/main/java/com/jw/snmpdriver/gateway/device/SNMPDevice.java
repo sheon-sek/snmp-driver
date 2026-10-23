@@ -1,8 +1,12 @@
 package com.jw.snmpdriver.gateway.device;
 
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import com.inductiveautomation.ignition.gateway.opcua.server.api.Device;
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
@@ -20,8 +24,12 @@ import com.jw.snmpdriver.snmp.runtime.SnmpEndpoint;
 import com.jw.snmpdriver.snmp.runtime.SnmpFailureClassifier;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueCodec;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueException;
+import com.jw.snmpdriver.snmp.trap.TokenBucket;
+import com.jw.snmpdriver.snmp.trap.TrapCounters;
+import com.jw.snmpdriver.snmp.trap.TrapFilter;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
 import com.jw.snmpdriver.snmp.trap.TrapListenerRegistry;
+import com.jw.snmpdriver.snmp.trap.TrapRecipient;
 import org.eclipse.milo.opcua.sdk.core.Reference;
 import org.eclipse.milo.opcua.sdk.server.AddressSpace.ReadContext;
 import org.eclipse.milo.opcua.sdk.server.AddressSpace.RevisedDataItemParameters;
@@ -53,22 +61,36 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     private final SubscriptionModel subscriptionModel;
     private final DeviceDiagnostics diagnostics;
     private final TrapDiagnostics trapDiagnostics;
+    private final TrapCounters trapCounters = new TrapCounters();
+    private final SecretResolver secrets;
 
     private final DeviceStatusMachine statusMachine = new DeviceStatusMachine(this::publishStatus);
     private volatile DevicePollHandle pollHandle;
     private volatile TrapListenerHandle trapHandle;
+    private volatile ScheduledFuture<?> counterFlush;
     private volatile SubscriptionBridge subscriptionBridge;
     private volatile DynamicAttributeReader attributeReader;
     private volatile DynamicAttributeWriter attributeWriter;
 
+    /** Test seam: lets a fake Gateway supply the plaintext of a SecretConfig. */
+    @FunctionalInterface
+    interface SecretResolver {
+        String resolve(SecretConfig secretConfig) throws SecretException;
+    }
+
     public SNMPDevice(DeviceContext context, SNMPDeviceConfig config, ServiceBundle services) {
+        this(context, config, services, null);
+    }
+
+    SNMPDevice(DeviceContext context, SNMPDeviceConfig config, ServiceBundle services, SecretResolver secrets) {
         super(context.getServer());
+        this.secrets = secrets;
         this.context = context;
         this.config = config;
         this.services = services;
         this.subscriptionModel = new SubscriptionModel(context.getServer(), this);
         this.diagnostics = new DeviceDiagnostics(this, context);
-        this.trapDiagnostics = TrapDiagnostics.forNodes(this, context);
+        this.trapDiagnostics = TrapDiagnostics.forNodes(this, context, services::licenseVerdict, trapCounters);
 
         getLifecycleManager().addLifecycle(subscriptionModel);
         getLifecycleManager().addStartupTask(this::onStartup);
@@ -280,7 +302,8 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                     getNodeManager()::containsNode,
                     () -> markRunning(generation),
                     error -> handleFailure(generation, error),
-                    snapshot -> handleActivity(generation, snapshot)
+                    snapshot -> handleActivity(generation, snapshot),
+                    trapDiagnostics
             );
             attributeReader = new DynamicAttributeReader(
                     context,
@@ -290,7 +313,8 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                     pollHandle,
                     diagnostics,
                     getNodeManager()::containsNode,
-                    config.accessMode()
+                    config.accessMode(),
+                    trapDiagnostics
             );
             attributeWriter = new DynamicAttributeWriter(
                     context,
@@ -380,6 +404,12 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             trapDiagnostics.showDisabled();
             return;
         }
+        if (config.trapSecurity() != SNMPDeviceConfig.TrapSecurity.COMMUNITY) {
+            // never fall back to a community receiver: that would accept v1/v2c and ACK Informs
+            trapDiagnostics.showUnsupported("USM Trap 接收将在后续版本提供，当前不接收 Notification"
+                    + "（不监听端口，不接收 v1/v2c，不确认 Inform）。");
+            return;
+        }
         try {
             Optional<TrapListenerRegistry> registry = services.trapRegistry();
             if (registry.isEmpty()) {
@@ -388,10 +418,12 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             }
             TrapListenerHandle handle = registry.get().acquire(
                     context.getName(), config.trapBindAddress(), config.trapPort(),
-                    trapDiagnostics::refresh);
+                    trapDiagnostics::refresh, createTrapRecipient());
             trapHandle = handle;
             trapDiagnostics.track(handle);
-        } catch (RuntimeException error) {
+            counterFlush = services.scheduler().scheduleWithFixedDelay(
+                    trapDiagnostics::flushCounters, 1, 1, TimeUnit.SECONDS);
+        } catch (RuntimeException | SecretException error) {
             logger.warn(
                     "Failed to acquire Trap listener device={} bindAddress={} port={} category=trap",
                     context.getName(), config.trapBindAddress(), config.trapPort(), error
@@ -400,7 +432,25 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         }
     }
 
+    /** COMMUNITY mode only (M1b; USM is rejected before this); the Trap Community falls back to the Read Community when empty. */
+    private TrapRecipient createTrapRecipient() throws SecretException {
+        String community = secret(config.trapCommunity());
+        if (community.isBlank()) {
+            community = secret(config.readCommunity());
+        }
+        TrapFilter filter = new TrapFilter(config.host(), config.trapSourceAllowlist(),
+                community.getBytes(StandardCharsets.UTF_8), InetAddress::getAllByName);
+        return new TrapRecipient(context.getName(), filter, trapCounters,
+                new TokenBucket(config.trapRateLimitPerSecond()), trapDiagnostics::accept, trapDiagnostics::notice,
+                config.trapAcceptInform());
+    }
+
     private void releaseTrapListener() {
+        ScheduledFuture<?> flush = counterFlush;
+        counterFlush = null;
+        if (flush != null) {
+            flush.cancel(false);
+        }
         TrapListenerHandle handle = trapHandle;
         trapHandle = null;
         if (handle != null) {
@@ -522,6 +572,9 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     }
 
     private String secret(SecretConfig secretConfig) throws SecretException {
+        if (secrets != null) {
+            return secrets.resolve(secretConfig);
+        }
         if (secretConfig == null) {
             return "";
         }

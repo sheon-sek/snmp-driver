@@ -1,28 +1,60 @@
 package com.jw.snmpdriver.gateway.device;
 
+import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
+import com.jw.snmpdriver.snmp.address.TrapItemPath;
+import com.jw.snmpdriver.snmp.runtime.LicenseGate;
+import com.jw.snmpdriver.snmp.trap.TrapCounters;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
+import com.jw.snmpdriver.snmp.trap.TrapListenerState;
+import com.jw.snmpdriver.snmp.trap.TrapNotification;
 import org.eclipse.milo.opcua.sdk.core.AccessLevel;
 import org.eclipse.milo.opcua.sdk.core.ValueRanks;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaFolderNode;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaVariableNode;
 import org.eclipse.milo.opcua.stack.core.Identifiers;
+import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
+import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
+import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
+import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
+import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** [Device]/Traps/{Status, LastError, ListenerEndpoint}; independent of the Device's own Status. */
+/**
+ * [Device]/Traps/ diagnostics, counters and Last/* snapshot nodes; independent of the Device's own Status.
+ * Values reach the sink as String, Long (UInt32/UInt64), Instant (DateTime, may be null) or a Bad StatusCode.
+ */
 public final class TrapDiagnostics {
     public static final String FOLDER_ID = "Traps";
     static final String STATUS = "Status";
     static final String LAST_ERROR = "LastError";
     static final String LISTENER_ENDPOINT = "ListenerEndpoint";
+    static final String OVERFLOW_COUNT = "OverflowCount";
+    static final String LAST_FOLDER = "Last";
+    static final String LAST_SEQUENCE = "Last/Sequence";
+    static final String LAST_RECEIVED_TIME = "Last/ReceivedTime";
+    static final String LAST_PDU_TYPE = "Last/PduType";
+    static final String LAST_VERSION = "Last/Version";
+    static final String LAST_TRAP_OID = "Last/TrapOid";
+    static final String LAST_SOURCE = "Last/Source";
+    static final String LAST_AGENT_ADDRESS = "Last/AgentAddress";
+    static final String LAST_AGENT_UP_TIME = "Last/AgentUpTime";
+    static final String LAST_VARBINDS = "Last/Varbinds";
+    static final String LAST_JSON = "Last/Json";
 
     private static final String REMEDIATION = "处置建议：Linux 上绑定 1024 以下端口需要 root 或 CAP_NET_BIND_SERVICE，"
             + "建议监听 10162 并用 nftables 将 UDP 162 重定向到 10162；"
@@ -32,14 +64,55 @@ public final class TrapDiagnostics {
     private static final String REJECTED_NOTE = "处置建议：修正冲突设备的 Trap 配置或停用冲突设备后，"
             + "重新保存或重新启用本设备以再次申请监听（被拒绝的申请不会自动重试）。";
 
-    private static final String M1A_NOTE = "M1a 仅占用端口，尚未处理收到的 Notification";
+    /** Shown as the Description of every {@code TRAP.*} node (ADR 0008). */
+    static final String TRAP_PATH_NOTE = "TRAP.* 是每个 trapOID 各自的独立计数器和最近一条，不是原子快照；"
+            + "需要一致读取请读设备级 Traps/Last/Json。只读，不触发 SNMP GET，在 Notification 到达时推送。";
+
+    private static final String NODE_NOTE = "Last/* 为非原子镜像，需要一致读取时读 Last/Json；"
+            + "计数器合并发布，每个节点至多每秒写一次。";
 
     private static final Logger logger = LoggerFactory.getLogger(TrapDiagnostics.class);
+
+    private enum NodeType {
+        STRING(Identifiers.String), UINT32(Identifiers.UInt32), UINT64(Identifiers.UInt64),
+        DATE_TIME(Identifiers.DateTime);
+
+        private final NodeId dataType;
+
+        NodeType(NodeId dataType) {
+            this.dataType = dataType;
+        }
+    }
+
+    private static final Map<String, NodeType> NODES = new LinkedHashMap<>();
+
+    static {
+        NODES.put(STATUS, NodeType.STRING);
+        NODES.put(LAST_ERROR, NodeType.STRING);
+        NODES.put(LISTENER_ENDPOINT, NodeType.STRING);
+        for (String name : new String[] {"ReceivedCount", "AcceptedCount", "DroppedRateLimitCount",
+                "DroppedQueueFullCount", "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount",
+                "ListenerUnmatchedCount", "ListenerMultiMatchCount"}) {
+            NODES.put(name, NodeType.UINT64);
+        }
+        NODES.put(OVERFLOW_COUNT, NodeType.UINT64);
+        NODES.put(LAST_SEQUENCE, NodeType.UINT64);
+        NODES.put(LAST_RECEIVED_TIME, NodeType.DATE_TIME);
+        NODES.put(LAST_PDU_TYPE, NodeType.STRING);
+        NODES.put(LAST_VERSION, NodeType.STRING);
+        NODES.put(LAST_TRAP_OID, NodeType.STRING);
+        NODES.put(LAST_SOURCE, NodeType.STRING);
+        NODES.put(LAST_AGENT_ADDRESS, NodeType.STRING);
+        NODES.put(LAST_AGENT_UP_TIME, NodeType.UINT32);
+        NODES.put(LAST_VARBINDS, NodeType.STRING);
+        NODES.put(LAST_JSON, NodeType.STRING);
+    }
 
     private enum Status {
         DISABLED("Disabled"),
         LISTENING("Listening"),
-        DEGRADED("Degraded");
+        DEGRADED("Degraded"),
+        UNLICENSED("Unlicensed");
 
         private final String text;
 
@@ -49,24 +122,174 @@ public final class TrapDiagnostics {
     }
 
     static String describe(String name) {
-        return "SNMP Device Trap diagnostic: " + name + "。" + M1A_NOTE;
+        return "SNMP Device Trap diagnostic: " + name + "。" + NODE_NOTE;
     }
 
-    private final BiConsumer<String, String> sink;
+    private static final String UNLICENSED_NOTE = "SNMP Driver 许可证无效，端口仍在监听但收到的 Notification 被丢弃，"
+            + "不更新 Traps 数据；许可证恢复后自动接收，无需重启。";
+
+    private static final String EXPIRED_NOTE = "SNMP Driver 许可证已过期，端口仍在监听但收到的 Notification 被丢弃，"
+            + "不更新 Traps 数据；续期后自动接收，无需重启。";
+
+    private final BiConsumer<String, Object> sink;
+    private final Supplier<LicenseGate.Verdict> license;
+    private final Map<String, LongSupplier> counterSources;
+    private final Map<String, Long> publishedCounters = new HashMap<>();
+    private final TrapState state = new TrapState();
+    private final TrapOidStates oidStates = new TrapOidStates();
+    private final List<PathSubscription> pathSubscriptions = new CopyOnWriteArrayList<>();
+    private volatile StatusCode lastQuality;
     private TrapListenerHandle handle;
     private boolean nodesCreated;
+    private String lastNotice;
     private NodeWriter writer;
 
-    TrapDiagnostics(BiConsumer<String, String> sink) {
+    TrapDiagnostics(BiConsumer<String, Object> sink) {
+        this(sink, () -> LicenseGate.Verdict.LICENSED);
+    }
+
+    TrapDiagnostics(BiConsumer<String, Object> sink, Supplier<LicenseGate.Verdict> license) {
+        this(sink, license, Map.of());
+    }
+
+    TrapDiagnostics(BiConsumer<String, Object> sink, Supplier<LicenseGate.Verdict> license,
+                    Map<String, LongSupplier> counterSources) {
         this.sink = sink;
+        this.license = license;
+        this.counterSources = counterSources;
     }
 
     /** Writes to variable nodes created by {@link #createUnder}. */
-    public static TrapDiagnostics forNodes(SNMPDevice addressSpace, DeviceContext context) {
+    public static TrapDiagnostics forNodes(SNMPDevice addressSpace, DeviceContext context,
+                                           Supplier<LicenseGate.Verdict> license, TrapCounters counters) {
         NodeWriter writer = new NodeWriter(addressSpace, context);
-        TrapDiagnostics diagnostics = new TrapDiagnostics(writer::set);
+        Map<String, LongSupplier> sources = new LinkedHashMap<>();
+        TrapDiagnostics diagnostics = new TrapDiagnostics(writer::set, license, sources);
+        sources.put("ReceivedCount", counters::received);
+        sources.put("AcceptedCount", counters::accepted);
+        sources.put("DroppedRateLimitCount", counters::droppedRateLimit);
+        sources.put("DroppedQueueFullCount", counters::droppedQueueFull);
+        sources.put("DroppedUnlicensedCount", counters::droppedUnlicensed);
+        sources.put("AuthFailureCount", counters::authFailure);
+        sources.put("DuplicateInformCount", counters::duplicateInform);
+        sources.put("ListenerUnmatchedCount", () -> diagnostics.listenerCount(false));
+        sources.put("ListenerMultiMatchCount", () -> diagnostics.listenerCount(true));
+        sources.put(OVERFLOW_COUNT, diagnostics.oidStates::overflowCount);
         diagnostics.writer = writer;
         return diagnostics;
+    }
+
+    private long listenerCount(boolean multiMatch) {
+        TrapListenerHandle current = handle;
+        if (current == null) {
+            return 0;
+        }
+        return multiMatch ? current.multiMatchCount() : current.unmatchedCount();
+    }
+
+    /** Called on the listener worker for every accepted Notification. */
+    public synchronized void accept(TrapNotification notification) {
+        TrapState.Snapshot snapshot = state.record(notification);
+        TrapOidStates.Entry entry = oidStates.record(snapshot.trapOid(), snapshot.sequence(), snapshot.receivedAt(),
+                snapshot.varbindsJson());
+        if (lastQuality == null) {
+            publishLast(snapshot);
+            if (entry != null) {
+                for (PathSubscription subscription : pathSubscriptions) {
+                    if (subscription.path.trapOid().canonical().equals(snapshot.trapOid())) {
+                        subscription.push(valueOf(subscription.path.field(), entry));
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Current value of a {@code TRAP.*} path. Lock-free, so a reader never waits for the listener worker.
+     * An untracked OID reads Count=0 and empty fields with Good quality; License follows {@code Last/*}.
+     */
+    public DataValue readTrapPath(TrapItemPath path) {
+        StatusCode quality = lastQuality;
+        if (quality != null) {
+            return new DataValue(quality);
+        }
+        return valueOf(path.field(), oidStates.get(path.trapOid().canonical()));
+    }
+
+    /**
+     * Pushes the path's current value to {@code sink} now and again whenever its OID's Notification arrives or the
+     * License verdict changes; no polling. Reserves a slot for the OID. Close the returned handle to stop.
+     */
+    public synchronized Runnable subscribeTrapPath(TrapItemPath path, Consumer<DataValue> sink) {
+        oidStates.reserve(path.trapOid().canonical());
+        PathSubscription subscription = new PathSubscription(path, sink);
+        pathSubscriptions.add(subscription);
+        subscription.push(readTrapPath(path));
+        return () -> pathSubscriptions.remove(subscription);
+    }
+
+    private static DataValue valueOf(TrapItemPath.Field field, TrapOidStates.Entry entry) {
+        return new DataValue(switch (field) {
+            case COUNT -> new Variant(Unsigned.ulong(entry.count()));
+            case SEQUENCE -> new Variant(Unsigned.ulong(entry.sequence()));
+            case LAST_TIME -> new Variant(entry.lastTime() == null
+                    ? DateTime.NULL_VALUE : new DateTime(entry.lastTime()));
+            case LAST_VARBINDS -> new Variant(entry.lastVarbindsJson());
+        });
+    }
+
+    private record PathSubscription(TrapItemPath path, Consumer<DataValue> sink) {
+        void push(DataValue value) {
+            try {
+                sink.accept(value);
+            } catch (RuntimeException error) {
+                logger.warn("Failed to push SNMP TRAP path {}", path.canonical(), error);
+            }
+        }
+    }
+
+    /** Writes the counters whose value changed since the last flush; driven once per second. */
+    public synchronized void flushCounters() {
+        counterSources.forEach((name, source) -> {
+            long value = source.getAsLong();
+            if (!Long.valueOf(value).equals(publishedCounters.getOrDefault(name, 0L))) {
+                publishedCounters.put(name, value);
+                sink.accept(name, value);
+            }
+        });
+    }
+
+    private void publishLast(TrapState.Snapshot snapshot) {
+        if (lastQuality != null) {
+            for (String name : NODES.keySet()) {
+                if (name.startsWith(LAST_FOLDER + "/")) {
+                    sink.accept(name, lastQuality);
+                }
+            }
+            return;
+        }
+        sink.accept(LAST_SEQUENCE, snapshot.sequence());
+        sink.accept(LAST_RECEIVED_TIME, snapshot.receivedAt());
+        sink.accept(LAST_PDU_TYPE, snapshot.pduType());
+        sink.accept(LAST_VERSION, snapshot.version());
+        sink.accept(LAST_TRAP_OID, snapshot.trapOid());
+        sink.accept(LAST_SOURCE, snapshot.source());
+        sink.accept(LAST_AGENT_ADDRESS, snapshot.agentAddress());
+        sink.accept(LAST_AGENT_UP_TIME, snapshot.agentUpTime());
+        sink.accept(LAST_VARBINDS, snapshot.varbindsJson());
+        sink.accept(LAST_JSON, snapshot.json());
+    }
+
+    /** Last/* follow the License verdict; null means Good. Only a change rewrites the nodes. */
+    private void applyLastQuality(StatusCode quality) {
+        if (java.util.Objects.equals(quality, lastQuality)) {
+            return;
+        }
+        lastQuality = quality;
+        publishLast(state.last());
+        for (PathSubscription subscription : pathSubscriptions) {
+            subscription.push(readTrapPath(subscription.path));
+        }
     }
 
     public synchronized void createUnder(UaFolderNode root) {
@@ -86,6 +309,12 @@ public final class TrapDiagnostics {
     public synchronized void showUnavailable(String reason) {
         handle = null;
         publish(Status.DEGRADED, reason + " " + REMEDIATION, "");
+    }
+
+    /** Trap security this version cannot receive with; no listener is acquired. */
+    public synchronized void showUnsupported(String reason) {
+        handle = null;
+        publish(Status.DEGRADED, reason, "");
     }
 
     /** Follows this handle; later registry changes arrive through {@link #refresh()}. */
@@ -110,13 +339,42 @@ public final class TrapDiagnostics {
         }
         String endpoint = current.endpoint() == null ? "" : current.endpoint();
         switch (current.state()) {
-            case BOUND -> publish(Status.LISTENING, "", endpoint);
+            case BOUND -> {
+                // Degraded outranks Unlicensed: without a bound port there is nothing to license
+                LicenseGate.Verdict verdict = license.get();
+                if (verdict == LicenseGate.Verdict.LICENSED) {
+                    publish(Status.LISTENING, "", endpoint);
+                } else {
+                    publish(Status.UNLICENSED,
+                            verdict == LicenseGate.Verdict.EXPIRED ? EXPIRED_NOTE : UNLICENSED_NOTE, endpoint);
+                }
+            }
             case FAILED -> publish(Status.DEGRADED, current.lastError() + " " + REMEDIATION, endpoint);
             case CLOSED -> publish(Status.DISABLED, "", "");
         }
     }
 
+    /**
+     * Operator-facing hint from the receive path (auth failure, DNS refresh failure). It only shows while
+     * Listening and only when the text changes, so a flood of bad packets writes the node once.
+     */
+    public synchronized void notice(String message) {
+        if (handle == null || handle.isRejected() || handle.state() != TrapListenerState.BOUND
+                || message.equals(lastNotice)) {
+            return;
+        }
+        lastNotice = message;
+        sink.accept(LAST_ERROR, message);
+    }
+
     private void publish(Status status, String error, String endpoint) {
+        lastNotice = null;
+        // Quality follows the License alone; Status still lets Degraded outrank Unlicensed
+        applyLastQuality(switch (license.get()) {
+            case LICENSED -> null;
+            case EXPIRED -> new StatusCode(StatusCodes.Bad_LicenseExpired);
+            case NOT_AVAILABLE -> new StatusCode(StatusCodes.Bad_LicenseNotAvailable);
+        });
         sink.accept(STATUS, status.text);
         sink.accept(LAST_ERROR, error);
         sink.accept(LISTENER_ENDPOINT, endpoint);
@@ -133,48 +391,75 @@ public final class TrapDiagnostics {
         }
 
         void createUnder(UaFolderNode root) {
-            UaFolderNode folder = new UaFolderNode(
-                    addressSpace.getNodeContext(),
-                    context.nodeId(FOLDER_ID),
-                    context.qualifiedName(FOLDER_ID),
-                    LocalizedText.english(FOLDER_ID)
-            );
-            addressSpace.getNodeManager().addNode(folder);
-            root.addOrganizes(folder);
-            for (String name : new String[] {STATUS, LAST_ERROR, LISTENER_ENDPOINT}) {
-                nodes.put(name, createVariable(folder, name));
-            }
+            UaFolderNode folder = createFolder(root, FOLDER_ID, FOLDER_ID);
+            UaFolderNode last = createFolder(folder, FOLDER_ID + "/" + LAST_FOLDER, LAST_FOLDER);
+            NODES.forEach((name, type) ->
+                    nodes.put(name, createVariable(name.startsWith(LAST_FOLDER + "/") ? last : folder, name, type)));
         }
 
-        private UaVariableNode createVariable(UaFolderNode folder, String name) {
+        private UaFolderNode createFolder(UaFolderNode parent, String id, String name) {
+            UaFolderNode folder = new UaFolderNode(
+                    addressSpace.getNodeContext(),
+                    context.nodeId(id),
+                    context.qualifiedName(name),
+                    LocalizedText.english(name)
+            );
+            addressSpace.getNodeManager().addNode(folder);
+            parent.addOrganizes(folder);
+            return folder;
+        }
+
+        private UaVariableNode createVariable(UaFolderNode folder, String name, NodeType type) {
+            String browseName = name.substring(name.lastIndexOf('/') + 1);
             UaVariableNode node = UaVariableNode.builder(addressSpace.getNodeContext())
                     .setNodeId(context.nodeId(FOLDER_ID + "/" + name))
-                    .setBrowseName(context.qualifiedName(name))
-                    .setDisplayName(LocalizedText.english(name))
+                    .setBrowseName(context.qualifiedName(browseName))
+                    .setDisplayName(LocalizedText.english(browseName))
                     .setDescription(LocalizedText.english(describe(name)))
                     .setTypeDefinition(Identifiers.BaseDataVariableType)
-                    .setDataType(Identifiers.String)
+                    .setDataType(type.dataType)
                     .setValueRank(ValueRanks.Scalar)
                     .setAccessLevel(AccessLevel.READ_ONLY)
                     .setUserAccessLevel(AccessLevel.READ_ONLY)
-                    .setValue(new DataValue(new Variant("")))
+                    .setValue(new DataValue(initialValue(type)))
                     .build();
             addressSpace.getNodeManager().addNode(node);
             folder.addOrganizes(node);
             return node;
         }
 
-        void set(String name, String value) {
+        private static Variant initialValue(NodeType type) {
+            return switch (type) {
+                case STRING -> new Variant("");
+                case UINT32 -> new Variant(Unsigned.uint(0));
+                case UINT64 -> new Variant(Unsigned.ulong(0));
+                case DATE_TIME -> new Variant(DateTime.NULL_VALUE);
+            };
+        }
+
+        void set(String name, Object value) {
             UaVariableNode node = nodes.get(name);
             if (node == null) {
                 return;
             }
             try {
-                node.setValue(new DataValue(new Variant(value)));
+                node.setValue(toDataValue(NODES.get(name), value));
             } catch (RuntimeException error) {
                 logger.warn("Failed to update SNMP Trap diagnostic device={} node={}",
                         context.getName(), name, error);
             }
+        }
+
+        private static DataValue toDataValue(NodeType type, Object value) {
+            if (value instanceof StatusCode quality) {
+                return new DataValue(quality);
+            }
+            return new DataValue(switch (type) {
+                case STRING -> new Variant(value);
+                case UINT32 -> new Variant(Unsigned.uint((Long) value & 0xFFFFFFFFL));
+                case UINT64 -> new Variant(Unsigned.ulong((Long) value));
+                case DATE_TIME -> new Variant(value == null ? DateTime.NULL_VALUE : new DateTime((Instant) value));
+            });
         }
     }
 }

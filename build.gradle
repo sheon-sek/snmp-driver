@@ -17,14 +17,14 @@ def purgeStaleModuleArtifacts = tasks.register("purgeStaleModuleArtifacts") {
             def libsDir = subproject.layout.buildDirectory.dir("libs").get().asFile
 
             libsDir.listFiles()
-                ?.findAll { it.isFile() && it.extension == "jar" }
+                ?.findAll { it.isFile() && it.name.endsWith(".jar") }
                 ?.findAll { it.name != expectedJarName }
                 ?.each { it.delete() }
         }
 
         layout.buildDirectory.dir("moduleContent").get().asFile
             .listFiles()
-            ?.findAll { it.isFile() && it.extension == "jar" }
+            ?.findAll { it.isFile() && it.name.endsWith(".jar") }
             ?.each { it.delete() }
     }
 }

@@ -11,6 +11,7 @@ import java.util.function.Predicate;
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
 import com.jw.snmpdriver.snmp.address.AddressResolver;
 import com.jw.snmpdriver.snmp.address.ResolvedAddress;
+import com.jw.snmpdriver.snmp.address.TrapItemPath;
 import com.jw.snmpdriver.snmp.runtime.DevicePollHandle;
 import com.jw.snmpdriver.snmp.runtime.DevicePollSnapshot;
 import com.jw.snmpdriver.snmp.runtime.PollSubscription;
@@ -42,6 +43,7 @@ public final class SubscriptionBridge {
     private final Runnable onLegalResponse;
     private final Consumer<Throwable> onFailure;
     private final Consumer<DevicePollSnapshot> onActivityChanged;
+    private final TrapDiagnostics traps;
     private final Map<DataItemKey, DataItem> items = new ConcurrentHashMap<>();
     private final Map<DataItemKey, ActiveSubscription> active = new ConcurrentHashMap<>();
     private final Map<NodeId, DataValue> latestValues = new ConcurrentHashMap<>();
@@ -60,6 +62,23 @@ public final class SubscriptionBridge {
             Consumer<Throwable> onFailure,
             Consumer<DevicePollSnapshot> onActivityChanged
     ) {
+        this(context, config, resolver, pollHandle, codec, diagnostics, isRealNode, onLegalResponse, onFailure,
+                onActivityChanged, null);
+    }
+
+    public SubscriptionBridge(
+            DeviceContext context,
+            SNMPDeviceConfig config,
+            AddressResolver resolver,
+            DevicePollHandle pollHandle,
+            SnmpValueCodec codec,
+            DeviceDiagnostics diagnostics,
+            Predicate<NodeId> isRealNode,
+            Runnable onLegalResponse,
+            Consumer<Throwable> onFailure,
+            Consumer<DevicePollSnapshot> onActivityChanged,
+            TrapDiagnostics traps
+    ) {
         this.context = context;
         this.config = config;
         this.resolver = resolver;
@@ -70,6 +89,7 @@ public final class SubscriptionBridge {
         this.onLegalResponse = onLegalResponse;
         this.onFailure = onFailure;
         this.onActivityChanged = onActivityChanged;
+        this.traps = traps;
     }
 
     public void restore(List<DataItem> restoredItems) {
@@ -174,9 +194,12 @@ public final class SubscriptionBridge {
             return;
         }
 
+        Optional<TrapItemPath> trapPath;
         ResolvedAddress address;
         try {
-            address = resolver.resolve(stripDevicePrefix(nodeId));
+            String itemPath = stripDevicePrefix(nodeId);
+            trapPath = traps == null ? Optional.empty() : resolver.resolveTrap(itemPath);
+            address = trapPath.isPresent() ? null : resolver.resolve(itemPath);
         } catch (IllegalArgumentException error) {
             SnmpValueException failure = new SnmpValueException(
                     StatusCodes.Bad_NodeIdInvalid,
@@ -194,6 +217,10 @@ public final class SubscriptionBridge {
                     failure.getMessage()
             );
             setLocalFailure(item, nodeId, failure.statusCode(), failure);
+            return;
+        }
+        if (trapPath.isPresent()) {
+            activateTrapPath(item, key, nodeId, trapPath.get());
             return;
         }
 
@@ -291,6 +318,23 @@ public final class SubscriptionBridge {
             setLocalFailure(item, nodeId, failure.statusCode(), error);
             notifyDeviceFailure(error, "ACTIVATE", nodeId);
         }
+    }
+
+    /** TRAP.* paths take no poll slot and ignore the sampling interval: values are pushed when a Notification arrives. */
+    private void activateTrapPath(DataItem item, DataItemKey key, NodeId nodeId, TrapItemPath path) {
+        ActiveSubscription holder = new ActiveSubscription();
+        ActiveSubscription displaced = active.put(key, holder);
+        if (displaced != null) {
+            closeSubscription(key, displaced, "CONCURRENT_REPLACE");
+        }
+        Runnable unsubscribe = traps.subscribeTrapPath(path, value -> {
+            if (stopped || active.get(key) != holder) {
+                return;
+            }
+            latestValues.put(nodeId, value);
+            item.setValue(value);
+        });
+        holder.attach(unsubscribe::run);
     }
 
     private void setLocalFailure(

@@ -3,6 +3,42 @@ package com.jw.snmpdriver.snmp.address;
 import java.util.Optional;
 
 public final class ItemPathParser {
+    private static final String TRAP_FIELDS = "Count, LastTime, LastVarbinds, Sequence";
+
+    /**
+     * The independent TRAP access-prefix branch: empty when the identifier is not a TRAP path, otherwise the
+     * parsed path or an {@link IllegalArgumentException}. RO/RW syntax is handled by {@link #parse}.
+     */
+    public Optional<TrapItemPath> parseTrap(String identifier) {
+        if (identifier == null) {
+            return Optional.empty();
+        }
+        String value = identifier.trim();
+        if (!hasTrapPrefix(value)) {
+            return Optional.empty();
+        }
+        int slash = value.indexOf('/');
+        String qualifier = slash < 0 ? value : value.substring(0, slash);
+        String usage = "expected TRAP.<Field>/<trapOID> with Field one of " + TRAP_FIELDS;
+        if (slash <= 0 || slash == value.length() - 1 || slash != value.lastIndexOf('/')
+                || qualifier.length() <= 5 || value.chars().anyMatch(Character::isWhitespace)) {
+            throw new IllegalArgumentException("Invalid TRAP Item Path; " + usage);
+        }
+        String token = qualifier.substring(5);
+        TrapItemPath.Field field = java.util.Arrays.stream(TrapItemPath.Field.values())
+                .filter(candidate -> candidate.token().equalsIgnoreCase(token))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Unsupported TRAP field '" + token + "'; " + usage));
+        NumericOid trapOid;
+        try {
+            trapOid = NumericOid.parse(value.substring(slash + 1));
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException("Invalid trapOID in TRAP Item Path: " + error.getMessage(), error);
+        }
+        return Optional.of(new TrapItemPath(field, trapOid));
+    }
+
     public ParsedItemPath parse(String identifier) {
         if (identifier == null || identifier.isBlank()) {
             throw new IllegalArgumentException(
@@ -10,6 +46,11 @@ public final class ItemPathParser {
             );
         }
         String value = identifier.trim();
+        if (hasTrapPrefix(value)) {
+            throw new IllegalArgumentException(
+                    "TRAP.<Field>/<trapOID> is Notification state, not an SNMP item; it is only valid as a read-only TRAP Item Path"
+            );
+        }
         if (value.contains("?") || value.chars().anyMatch(Character::isWhitespace)) {
             throw new IllegalArgumentException("SNMP Item Path must not contain internal whitespace or query syntax");
         }
@@ -68,5 +109,10 @@ public final class ItemPathParser {
                 NumericOid.parse(value.substring(slash + 1))
         );
     }
-}
 
+    private static boolean hasTrapPrefix(String value) {
+        int slash = value.indexOf('/');
+        String qualifier = slash < 0 ? value : value.substring(0, slash);
+        return qualifier.equalsIgnoreCase("TRAP") || qualifier.regionMatches(true, 0, "TRAP.", 0, 5);
+    }
+}
