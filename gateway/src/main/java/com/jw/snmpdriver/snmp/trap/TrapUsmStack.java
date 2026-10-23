@@ -76,6 +76,14 @@ public final class TrapUsmStack {
     }
 
     public TrapUsmStack(byte[] localEngineId, int engineBoots, boolean informEnabled) {
+        this(localEngineId, engineBoots, 0, informEnabled);
+    }
+
+    /**
+     * {@code engineTime} is the local engine's current time in seconds, from the registry-wide clock: a new USM
+     * would otherwise restart it at 0 and move the same authoritative engine back in time.
+     */
+    public TrapUsmStack(byte[] localEngineId, int engineBoots, int engineTime, boolean informEnabled) {
         localEngine = new OctetString(localEngineId);
         this.informEnabled = informEnabled;
         protocols = new SecurityProtocols(SecurityProtocols.SecurityProtocolSet.none);
@@ -113,6 +121,7 @@ public final class TrapUsmStack {
         };
         // discovery stays off: only the local engine (below) and registered sender engines pass checkEngineID
         usm.setEngineDiscoveryEnabled(false);
+        usm.getTimeTable().setLocalTime(new UsmTimeEntry(localEngine, engineBoots, engineTime));
         if (informEnabled) {
             // the time is checked against the local clock (authoritative branch), this entry only admits the id
             usm.getTimeTable().addEntry(new UsmTimeEntry(localEngine, engineBoots, 0));
