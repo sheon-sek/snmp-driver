@@ -150,6 +150,38 @@ class TrapEngineIdentityTest {
     }
 
     @Test
+    void parentDirectoryIsSyncedAfterTheMoveLandsTheFile() {
+        List<Path> synced = new java.util.ArrayList<>();
+        TrapEngineIdentity identity = load(MACHINE, (target, content) -> TrapEngineIdentity.writeAtomically(
+                target, content, directory -> {
+                    assertTrue(Files.exists(target), "fsync 目录须在 ATOMIC_MOVE 之后");
+                    synced.add(directory);
+                }));
+        assertTrue(identity.informAvailable());
+        assertEquals(List.of(file().getParent().toAbsolutePath()), synced);
+    }
+
+    @Test
+    void directorySyncIoFailureIsAWriteFailure() {
+        TrapEngineIdentity identity = load(MACHINE, (target, content) -> TrapEngineIdentity.writeAtomically(
+                target, content, directory -> {
+                    throw new IOException("EIO");
+                }));
+        assertFalse(identity.informAvailable());
+        assertTrue(identity.notice().contains("EIO"), identity.notice());
+    }
+
+    @Test
+    void directorySyncUnsupportedByThePlatformCountsAsSuccess() {
+        TrapEngineIdentity identity = load(MACHINE, (target, content) -> TrapEngineIdentity.writeAtomically(
+                target, content, directory -> {
+                    throw new UnsupportedOperationException("no directory fsync");
+                }));
+        assertTrue(identity.informAvailable());
+        assertNull(identity.notice());
+    }
+
+    @Test
     void writeFailureDisablesInformButKeepsAnIdentity() {
         TrapEngineIdentity identity = load(MACHINE, (target, content) -> {
             throw new IOException("disk full");

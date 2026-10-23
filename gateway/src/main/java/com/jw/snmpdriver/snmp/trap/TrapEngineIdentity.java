@@ -51,6 +51,12 @@ public final class TrapEngineIdentity {
         void write(Path target, byte[] content) throws IOException;
     }
 
+    /** Flushes a directory's entries to disk; throws UnsupportedOperationException where the platform cannot. */
+    @FunctionalInterface
+    public interface DirectorySync {
+        void force(Path directory) throws IOException;
+    }
+
     private final byte[] engineId;
     private final int engineBoots;
     private final boolean informAvailable;
@@ -164,8 +170,12 @@ public final class TrapEngineIdentity {
         }
     }
 
-    /** Temp file in the same directory, fsync, then ATOMIC_MOVE over the target. Creates the directory. */
+    /** Temp file in the same directory, fsync, ATOMIC_MOVE over the target, then fsync the directory. */
     public static void writeAtomically(Path target, byte[] content) throws IOException {
+        writeAtomically(target, content, TrapEngineIdentity::forceDirectory);
+    }
+
+    static void writeAtomically(Path target, byte[] content, DirectorySync directorySync) throws IOException {
         Path directory = target.toAbsolutePath().getParent();
         Files.createDirectories(directory);
         Path temp = Files.createTempFile(directory, target.getFileName().toString(), ".tmp");
@@ -181,6 +191,22 @@ public final class TrapEngineIdentity {
             Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally {
             Files.deleteIfExists(temp);
+        }
+        // the rename is durable only once the directory entry is; an I/O error here is a write failure
+        try {
+            directorySync.force(directory);
+        } catch (UnsupportedOperationException unsupported) {
+            logger.debug("Directory fsync is not supported for {}; relying on ATOMIC_MOVE alone", directory);
+        }
+    }
+
+    /** Linux and macOS can fsync a directory; Windows cannot open one as a channel. */
+    private static void forceDirectory(Path directory) throws IOException {
+        if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")) {
+            throw new UnsupportedOperationException("directory fsync on Windows");
+        }
+        try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
+            channel.force(true);
         }
     }
 
