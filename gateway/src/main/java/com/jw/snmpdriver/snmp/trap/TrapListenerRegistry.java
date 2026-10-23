@@ -102,7 +102,7 @@ public final class TrapListenerRegistry {
         }
         Listener listener = listeners.get(port);
         if (listener == null) {
-            listener = new Listener(port, address, license);
+            listener = new Listener(port, address, license, newUsmStack());
             listeners.put(port, listener);
             listener.router.start();
             startLicenseWatch();
@@ -118,6 +118,15 @@ public final class TrapListenerRegistry {
             listener.watchers.add(onChange);
         }
         if (recipient != null) {
+            if (recipient.v3User() != null) {
+                // the user is localized now, never on the fly for whatever engineID a packet claims (ADR 0003)
+                try {
+                    listener.usm.register(recipient.v3User());
+                } catch (IllegalArgumentException error) {
+                    // validate bounds engineID length; anything else must not leave the listener half-acquired
+                    recipient.notice().accept("无法注册 v3 Trap 用户：" + error.getMessage());
+                }
+            }
             listener.router.add(recipient);
             startResolver();
             ScheduledFuture<?> refresh = scheduleSourceRefresh(recipient);
@@ -182,6 +191,9 @@ public final class TrapListenerRegistry {
                               TrapRecipient recipient) {
         if (recipient != null) {
             listener.router.remove(recipient);
+            if (recipient.v3User() != null) {
+                listener.usm.unregister(recipient.v3User());
+            }
             ScheduledFuture<?> refresh = listener.refreshes.remove(recipient);
             if (refresh != null) {
                 refresh.cancel(false);
@@ -252,6 +264,19 @@ public final class TrapListenerRegistry {
         }
     }
 
+    /** One private stack per Listener, on the Gateway engine identity so v3 Informs (#36) can share it. */
+    private TrapUsmStack newUsmStack() {
+        if (engineIdentity == null) {
+            return new TrapUsmStack(org.snmp4j.mp.MPv3.createLocalEngineID(), 1);
+        }
+        return new TrapUsmStack(engineIdentity.engineId(), engineIdentity.engineBoots());
+    }
+
+    synchronized TrapUsmStack usmStackOf(int port) {
+        Listener listener = listeners.get(port);
+        return listener == null ? null : listener.usm;
+    }
+
     // Lock-free too: router counters are atomics, and TrapDiagnostics reads them under its own lock.
     long unmatchedCountOf(Listener listener) {
         return listener.router.unmatchedCount();
@@ -265,7 +290,7 @@ public final class TrapListenerRegistry {
         Closeable bound = null;
         Exception failure = null;
         try {
-            bound = binder.bind(listener.address, listener.port, listener.router);
+            bound = binder.bind(listener.address, listener.port, listener.router, listener.usm);
         } catch (IOException | RuntimeException error) {
             failure = error;
         }
@@ -307,7 +332,7 @@ public final class TrapListenerRegistry {
         Closeable bound = null;
         Exception failure = null;
         try {
-            bound = binder.bind(listener.address, listener.port, listener.router);
+            bound = binder.bind(listener.address, listener.port, listener.router, listener.usm);
         } catch (IOException | RuntimeException error) {
             failure = error;
         }
@@ -386,10 +411,12 @@ public final class TrapListenerRegistry {
         final List<Runnable> watchers = new ArrayList<>();
         final NotificationRouter router;
         final Map<TrapRecipient, ScheduledFuture<?>> refreshes = new HashMap<>();
+        final TrapUsmStack usm;
 
-        Listener(int port, InetAddress address, Supplier<LicenseGate.Verdict> license) {
+        Listener(int port, InetAddress address, Supplier<LicenseGate.Verdict> license, TrapUsmStack usm) {
             this.port = port;
             this.address = address;
+            this.usm = usm;
             this.router = new NotificationRouter(port, license);
         }
 

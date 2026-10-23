@@ -13,4 +13,13 @@ public interface ListenerBinder {
     default Closeable bind(InetAddress address, int port, NotificationHandler handler) throws IOException {
         return bind(address, port);
     }
+
+    /**
+     * Also decodes v3 with {@code usm}, the Listener's private Trap security stack. Binders without v3 support
+     * keep the v1/v2c behaviour.
+     */
+    default Closeable bind(InetAddress address, int port, NotificationHandler handler, TrapUsmStack usm)
+            throws IOException {
+        return bind(address, port, handler);
+    }
 }

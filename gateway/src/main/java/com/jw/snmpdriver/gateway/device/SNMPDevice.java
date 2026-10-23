@@ -30,6 +30,7 @@ import com.jw.snmpdriver.snmp.trap.TrapFilter;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
 import com.jw.snmpdriver.snmp.trap.TrapListenerRegistry;
 import com.jw.snmpdriver.snmp.trap.TrapRecipient;
+import com.jw.snmpdriver.snmp.trap.TrapV3User;
 import org.eclipse.milo.opcua.sdk.core.Reference;
 import org.eclipse.milo.opcua.sdk.server.AddressSpace.ReadContext;
 import org.eclipse.milo.opcua.sdk.server.AddressSpace.RevisedDataItemParameters;
@@ -406,21 +407,18 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             trapDiagnostics.showDisabled();
             return;
         }
-        if (config.trapSecurity() != SNMPDeviceConfig.TrapSecurity.COMMUNITY) {
-            // never fall back to a community receiver: that would accept v1/v2c and ACK Informs
-            trapDiagnostics.showUnsupported("USM Trap 接收将在后续版本提供，当前不接收 Notification"
-                    + "（不监听端口，不接收 v1/v2c，不确认 Inform）。");
-            return;
-        }
         try {
             Optional<TrapListenerRegistry> registry = services.trapRegistry();
             if (registry.isEmpty()) {
                 trapDiagnostics.showUnavailable("Trap 监听器注册表不可用，Trap 接收已停用。");
                 return;
             }
+            TrapRecipient recipient = createTrapRecipient();
+            trapDiagnostics.showConfigNotice(recipient.v3User() != null && !recipient.v3User().receivesTraps()
+                    ? TrapV3User.NO_SENDER_ENGINE_ID : "");
             TrapListenerHandle handle = registry.get().acquire(
                     context.getName(), config.trapBindAddress(), config.trapPort(),
-                    trapDiagnostics::refresh, createTrapRecipient());
+                    trapDiagnostics::refresh, recipient);
             trapHandle = handle;
             trapDiagnostics.track(handle);
             counterFlush = services.scheduler().scheduleWithFixedDelay(
@@ -434,8 +432,23 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         }
     }
 
-    /** COMMUNITY mode only (M1b; USM is rejected before this); the Trap Community falls back to the Read Community when empty. */
+    /**
+     * USM: the Device's v3 user, localized to {@code trapSenderEngineId} by the listener; v1/v2c are refused.
+     * COMMUNITY: the Trap Community, falling back to the Read Community when empty.
+     */
     private TrapRecipient createTrapRecipient() throws SecretException {
+        if (config.trapSecurity() == SNMPDeviceConfig.TrapSecurity.USM) {
+            boolean authenticated = config.securityLevel() != SNMPDeviceConfig.SecurityLevel.NO_AUTH_NO_PRIV;
+            boolean encrypted = config.securityLevel() == SNMPDeviceConfig.SecurityLevel.AUTH_PRIV;
+            TrapV3User user = TrapV3User.of(config.securityName(), config.securityLevel(), config.authProtocol(),
+                    authenticated ? secret(config.authPassphrase()) : null, config.privacyProtocol(),
+                    encrypted ? secret(config.privacyPassphrase()) : null, config.trapSenderEngineId());
+            TrapFilter filter = new TrapFilter(config.host(), config.trapSourceAllowlist(), new byte[0],
+                    InetAddress::getAllByName);
+            return new TrapRecipient(context.getName(), filter, trapCounters,
+                    new TokenBucket(config.trapRateLimitPerSecond()), trapDiagnostics::accept,
+                    trapDiagnostics::notice, config.trapAcceptInform(), user);
+        }
         String community = secret(config.trapCommunity());
         if (community.isBlank()) {
             community = secret(config.readCommunity());

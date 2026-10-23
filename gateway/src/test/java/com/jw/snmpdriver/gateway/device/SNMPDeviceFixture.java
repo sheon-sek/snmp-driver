@@ -53,6 +53,12 @@ final class SNMPDeviceFixture implements AutoCloseable {
 
     SNMPDeviceFixture(boolean trapEnabled, String trapCommunity, boolean licensed,
                       SNMPDeviceConfig.TrapSecurity trapSecurity) throws Exception {
+        this(trapEnabled, trapCommunity, licensed, trapSecurity, "");
+    }
+
+    /** {@code trapSenderEngineId} applies to USM: the v3 user "probe" (noAuthNoPriv) is localized to it. */
+    SNMPDeviceFixture(boolean trapEnabled, String trapCommunity, boolean licensed,
+                      SNMPDeviceConfig.TrapSecurity trapSecurity, String trapSenderEngineId) throws Exception {
         trapPort = freeUdpPort();
         GatewayContext gateway = gatewayContext();
         var setup = ServiceBundle.class.getDeclaredMethod("setupProcess", GatewayContext.class);
@@ -68,7 +74,7 @@ final class SNMPDeviceFixture implements AutoCloseable {
                 null, null, "probe", SNMPDeviceConfig.SecurityLevel.NO_AUTH_NO_PRIV, d.authProtocol(), null,
                 d.privacyProtocol(), null, "", d.accessMode(), d.timeoutMillis(), d.retries(), d.maxOidsPerRequest(),
                 d.maxRequestBytes(), d.maxInflightPerDevice(), trapEnabled, "127.0.0.1", trapPort,
-                trapSecurity, null, "", true, "", 1000);
+                trapSecurity, null, trapSenderEngineId, true, "", 1000);
         device = new SNMPDevice(deviceContext(server, gateway), config, bundle, secret -> trapCommunity);
         device.startup();
     }
