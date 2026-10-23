@@ -3,6 +3,7 @@ package com.jw.snmpdriver.snmp.runtime;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 import com.jw.ignition.common.license.ModuleLicenseRuntime;
 import com.jw.ignition.license.enums.LicenseStatusCode;
@@ -10,19 +11,28 @@ import com.jw.ignition.license.model.LicenseStatusModel;
 
 /** Side-effect free License verdict shared by polling and Trap; the status model is cached per instance. */
 public final class LicenseGate {
-    public enum Verdict { LICENSED, NOT_AVAILABLE, EXPIRED }
+    /** PENDING: the License has not been verified yet since module startup. */
+    public enum Verdict { LICENSED, PENDING, NOT_AVAILABLE, EXPIRED }
 
-    private final ModuleLicenseRuntime license;
+    private final Supplier<LicenseStatusModel> license;
     private volatile CachedAccess cachedAccess = CachedAccess.empty();
 
     public LicenseGate(ModuleLicenseRuntime license) {
+        Objects.requireNonNull(license);
+        this.license = () -> license.service().currentStatus();
+    }
+
+    public LicenseGate(Supplier<LicenseStatusModel> license) {
         this.license = Objects.requireNonNull(license);
     }
 
     /** Never throws; an unreadable License counts as not available. */
     public Verdict check() {
         try {
-            LicenseStatusModel status = license.service().currentStatus();
+            LicenseStatusModel status = license.get();
+            if (status != null && status.code == LicenseStatusCode.UNVERIFIED) {
+                return Verdict.PENDING;
+            }
             CachedAccess access = cachedAccess;
             if (access.status() != status) {
                 access = updateCachedAccess(status);
