@@ -85,7 +85,7 @@ $data/config/local/com.jw.snmpdriver/trap-engine.properties
 用户处置：
 
 - 在所有 v3 Inform 发送方更新为新的 engineID（大多数发送方会自动 discovery）。
-- **误判**时：停止模块，用 `.cloned-<ts>` 文件覆盖 `trap-engine.properties`，再重启模块。
+- **误判**时：先找出并恢复导致指纹变化的机器标识（例如 Docker 下重新固定 hostname/MAC，见 §6），再停止模块，用 `.cloned-<ts>` 文件覆盖 `trap-engine.properties`，最后重启模块。如果机器标识仍与旧文件不符，模块会再次判定为克隆并重新生成 engineID，恢复不会生效。
 - **主动更换 engineID**：删除 `trap-engine.properties` 后重启模块。
 - 采集不到任何机器标识时不判定克隆，保留现有 engineID。
 - 影响范围仅 v3 Inform；v1/v2c/v3 Trap 不受影响。
@@ -136,12 +136,12 @@ services:
 
 ```text
 table inet snmptrap {
-  chain prerouting { type nat hook prerouting priority dstnat; udp dport 162 redirect to :10162 }
-  chain output     { type nat hook output     priority -100;   udp dport 162 redirect to :10162 }
+  chain prerouting { type nat hook prerouting priority dstnat; fib daddr type local udp dport 162 redirect to :10162 }
+  chain output     { type nat hook output     priority -100;   fib daddr type local udp dport 162 redirect to :10162 }
 }
 ```
 
-`prerouting` 处理外部流量，`output` 处理本机发往 162 的流量。REDIRECT 保留源 IP，源地址路由与 allowlist 照常生效。不推荐对 JVM 使用 `setcap cap_net_bind_service`（权限作用于整个 JVM，且随 JRE 升级失效）。
+`prerouting` 处理外部流量，`output` 处理本机发往 162 的流量。`fib daddr type local` 把重定向限定在发往本机地址的报文，本机发往其他 Trap 接收端的报文和经本机转发的流量不受影响。REDIRECT 保留源 IP，源地址路由与 allowlist 照常生效。不推荐对 JVM 使用 `setcap cap_net_bind_service`（权限作用于整个 JVM，且随 JRE 升级失效）。
 
 ### 9.2 Windows
 
