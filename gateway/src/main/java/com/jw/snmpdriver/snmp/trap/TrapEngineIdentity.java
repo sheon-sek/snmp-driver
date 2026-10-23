@@ -42,7 +42,8 @@ public final class TrapEngineIdentity {
     private static final DateTimeFormatter SUFFIX_TIME =
             DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC);
     private static final HexFormat HEX = HexFormat.of();
-    /** RFC 3414 §2.2.2: engineID length 5..32 octets. Tests use shorter ids, so only the upper bound is enforced. */
+    /** SnmpEngineID (RFC 3411): 5..32 octets; anything else in the file is recovered as corrupt. */
+    private static final int MIN_ENGINE_ID_LENGTH = 5;
     private static final int MAX_ENGINE_ID_LENGTH = 32;
 
     /** Writes {@code content} to {@code target} durably; the default is temp file + fsync + ATOMIC_MOVE. */
@@ -229,7 +230,7 @@ public final class TrapEngineIdentity {
         } catch (IllegalArgumentException error) {
             throw new CorruptException("engineId 不是十六进制");
         }
-        if (engineId.length == 0 || engineId.length > MAX_ENGINE_ID_LENGTH) {
+        if (engineId.length < MIN_ENGINE_ID_LENGTH || engineId.length > MAX_ENGINE_ID_LENGTH) {
             throw new CorruptException("engineId 长度无效");
         }
         int boots;
