@@ -201,11 +201,12 @@ public final class TrapListenerRegistry {
         }
     }
 
-    synchronized long unmatchedCountOf(Listener listener) {
+    // Lock-free too: router counters are atomics, and TrapDiagnostics reads them under its own lock.
+    long unmatchedCountOf(Listener listener) {
         return listener.router.unmatchedCount();
     }
 
-    synchronized long multiMatchCountOf(Listener listener) {
+    long multiMatchCountOf(Listener listener) {
         return listener.router.multiMatchCount();
     }
 

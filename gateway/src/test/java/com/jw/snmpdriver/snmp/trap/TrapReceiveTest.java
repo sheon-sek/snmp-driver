@@ -178,4 +178,29 @@ class TrapReceiveTest {
 
         assertTrue(joined.get(), "the transport thread must be able to read state while close() holds the lock");
     }
+
+    @Test
+    void transportThreadReadingListenerCountersCannotDeadlockClose() throws Exception {
+        AtomicReference<TrapListenerHandle> handle = new AtomicReference<>();
+        AtomicBoolean joined = new AtomicBoolean();
+        // the transport thread's notice waits for the diagnostics lock, whose holder (flushCounters) reads these
+        TrapListenerRegistry local = new TrapListenerRegistry((address, port) -> () -> {
+            Thread transport = new Thread(() -> {
+                handle.get().unmatchedCount();
+                handle.get().multiMatchCount();
+            });
+            transport.start();
+            try {
+                transport.join(3000);
+                joined.set(!transport.isAlive());
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+        }, scheduler);
+        handle.set(local.acquire("a", "127.0.0.1", freePort()));
+
+        handle.get().release();
+
+        assertTrue(joined.get(), "listener counters must be readable while close() holds the registry lock");
+    }
 }
