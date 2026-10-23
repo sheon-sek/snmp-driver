@@ -54,8 +54,11 @@ public final class Snmp4jListenerBinder implements ListenerBinder {
             dispatcher.addAuthenticationFailureListener(new AuthenticationFailureListener() {
                 @Override
                 public <A extends Address> void authenticationFailure(AuthenticationFailureEvent<A> event) {
-                    if (event.getAddress() instanceof UdpAddress peer) {
-                        handler.onAuthenticationFailure(peer.getInetAddress(), event.getError());
+                    TrapUsmStack.Rejection rejection = usm.takeRejection();
+                    if (rejection != TrapUsmStack.Rejection.DISCOVERY
+                            && event.getAddress() instanceof UdpAddress peer) {
+                        handler.onAuthenticationFailure(peer.getInetAddress(), event.getError(),
+                                rejection == TrapUsmStack.Rejection.LOCAL_ENGINE);
                     }
                 }
             });
@@ -89,9 +92,8 @@ public final class Snmp4jListenerBinder implements ListenerBinder {
         int model = event.getMessageProcessingModel();
         TrapNotification.Version version = model == MPv1.ID ? TrapNotification.Version.V1
                 : model == MPv3.ID ? TrapNotification.Version.V3 : TrapNotification.Version.V2C;
-        // v3 Inform is ACKed by #36 (localized to the Gateway engine); until then it is never ACKed here
-        Runnable ack = type == PDU.INFORM && version != TrapNotification.Version.V3
-                ? () -> acknowledge(event, pdu) : null;
+        // a v3 Inform's RESPONSE goes back under the Gateway engine it was authenticated with
+        Runnable ack = type == PDU.INFORM ? () -> acknowledge(event, pdu) : null;
         byte[] engine = version == TrapNotification.Version.V3 && usm != null ? usm.takeIncomingEngineId() : null;
         handler.onNotification(new IncomingNotification(
                 peer.getInetAddress(), peer.getPort(), version, event.getSecurityName(), pdu, ack,

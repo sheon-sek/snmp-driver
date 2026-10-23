@@ -45,6 +45,10 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
     private final Map<InetAddress, UnmatchedLog> unmatchedLog = new ConcurrentHashMap<>();
     private final Map<TrapRecipient, InformDeduplicator> deduplicators = new ConcurrentHashMap<>();
     private final LongSupplier nanos;
+    /** The Gateway engine v3 Informs are authenticated under; null while this Listener takes no v3 Inform. */
+    private volatile byte[] localEngineId;
+    /** Traps/LastError for every v3 Inform while the engine identity cannot back one (ADR 0009); else null. */
+    private volatile String v3InformUnavailable;
 
     NotificationRouter(int port, Supplier<LicenseGate.Verdict> license) {
         this(port, license, QUEUE_CAPACITY);
@@ -61,6 +65,12 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
         this.queue = new ArrayBlockingQueue<>(queueCapacity);
         this.worker = new Thread(this::drain, "snmp-trap-" + port);
         this.worker.setDaemon(true);
+    }
+
+    /** v3 Informs are addressed to {@code localEngineId}; a non-null {@code unavailable} refuses to ACK them. */
+    void v3Inform(byte[] localEngineId, String unavailable) {
+        this.localEngineId = localEngineId == null ? null : localEngineId.clone();
+        this.v3InformUnavailable = unavailable;
     }
 
     /** One worker per Listener: Devices are served in arrival order and never on the transport thread. */
@@ -161,11 +171,6 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
                             + " 的 Notification 认证失败：" + failure);
                     continue;
                 }
-                if (incoming.version() == TrapNotification.Version.V3 && incoming.pdu().getType() == PDU.INFORM) {
-                    // v3 Inform needs users localized to the Gateway engine and its own ACK path (#36)
-                    logger.debug("Ignored v3 Inform port={} source={} category=trap", port, incoming.source());
-                    return;
-                }
                 if (!parsed) {
                     notification = parse(incoming);
                     parsed = true;
@@ -178,6 +183,9 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
                 recipient.counters().countReceived();
                 if (incoming.ack() == null) {
                     admit(recipient, notification);
+                } else if (incoming.version() == TrapNotification.Version.V3 && v3InformUnavailable != null) {
+                    // the sender retries; ACKing under an identity that cannot be kept would break RFC 3414
+                    recipient.notice().accept(v3InformUnavailable);
                 } else if (recipient.acceptInform()) {
                     acknowledge |= admitInform(recipient, incoming, notification);
                 }
@@ -197,7 +205,7 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
      * has already passed USM; here it must also be this Device's user, sender engine and at least its level,
      * because USM authenticates before routing and cannot tell Devices apart (§4.6).
      */
-    private static String authenticate(TrapRecipient recipient, IncomingNotification incoming) {
+    private String authenticate(TrapRecipient recipient, IncomingNotification incoming) {
         TrapV3User user = recipient.v3User();
         if (incoming.version() != TrapNotification.Version.V3) {
             if (user != null) {
@@ -213,7 +221,12 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
                 incoming.community())) {
             return "securityName 与设备配置不一致。";
         }
-        if (incoming.pdu().getType() != PDU.INFORM) {
+        if (incoming.pdu().getType() == PDU.INFORM) {
+            // the receiver is authoritative for an Inform: a sender engineID here is a Trap user misused
+            if (!java.util.Arrays.equals(localEngineId, incoming.securityEngineId())) {
+                return "v3 Inform 的 engineID 不是 Gateway 本地 engineID（Traps/LocalEngineId），请让发送方重新 discovery。";
+            }
+        } else {
             if (!user.receivesTraps()) {
                 return TrapV3User.NO_SENDER_ENGINE_ID;
             }
@@ -230,8 +243,18 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
     /** USM rejected a v3 message before routing; it counts for the USM Devices that own the source. */
     @Override
     public void onAuthenticationFailure(InetAddress source, int status) {
+        onAuthenticationFailure(source, status, false);
+    }
+
+    @Override
+    public void onAuthenticationFailure(InetAddress source, int status, boolean toLocalEngine) {
         try {
-            String reason = usmFailure(status);
+            String unavailable = v3InformUnavailable;
+            String reason = toLocalEngine && unavailable != null ? unavailable
+                    : toLocalEngine && status == SnmpConstants.SNMPv3_USM_NOT_IN_TIME_WINDOW
+                    ? "v3 Inform 超出 Gateway 本地时间窗（engineBoots/engineTime 不一致），已按防重放拒绝；"
+                    + "发送方需重新 discovery 或清除其引擎缓存。"
+                    : usmFailure(status);
             for (TrapRecipient recipient : recipients) {
                 if (recipient.v3User() != null && recipient.filter().matchesSource(source)) {
                     recipient.counters().countAuthFailure();
@@ -271,8 +294,13 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
             return false;
         }
         InformDeduplicator deduplicator = deduplicators.computeIfAbsent(recipient, key -> new InformDeduplicator(nanos));
-        InformDeduplicator.Key key = new InformDeduplicator.Key(incoming.source(), incoming.sourcePort(),
-                incoming.version(), incoming.community(), "", incoming.pdu().getRequestID().getValue());
+        int requestId = incoming.pdu().getRequestID().getValue();
+        InformDeduplicator.Key key = incoming.version() == TrapNotification.Version.V3
+                ? InformDeduplicator.Key.v3(incoming.source(), incoming.sourcePort(), incoming.community(),
+                        incoming.securityEngineId(), incoming.pdu() instanceof org.snmp4j.ScopedPDU scoped
+                                ? scoped.getContextName().toString() : "", requestId)
+                : new InformDeduplicator.Key(incoming.source(), incoming.sourcePort(), incoming.version(),
+                        incoming.community(), "", requestId);
         if (deduplicator.contains(key)) {
             recipient.counters().countDuplicateInform();
             return true;

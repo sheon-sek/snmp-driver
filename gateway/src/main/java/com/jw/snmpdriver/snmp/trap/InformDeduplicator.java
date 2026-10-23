@@ -17,12 +17,22 @@ final class InformDeduplicator {
     static final long TTL_NANOS = TimeUnit.SECONDS.toNanos(60);
     static final int CAPACITY = 4096;
 
-    /** The community is kept only as a digest; {@code contextName} is empty for v1/v2c. */
+    /**
+     * The community (v1/v2c) or securityName (v3) is kept only as a digest; {@code engineId} is the v3
+     * authoritative engine in hex and empty for v1/v2c, as is {@code contextName}.
+     */
     record Key(InetAddress source, int sourcePort, TrapNotification.Version version, String communityDigest,
-               String contextName, int requestId) {
+               String engineId, String contextName, int requestId) {
         Key(InetAddress source, int sourcePort, TrapNotification.Version version, byte[] community,
             String contextName, int requestId) {
-            this(source, sourcePort, version, digest(community), contextName, requestId);
+            this(source, sourcePort, version, digest(community), "", contextName, requestId);
+        }
+
+        /** v3: securityName plus the authoritative engineID it was authenticated under (§4.5). */
+        static Key v3(InetAddress source, int sourcePort, byte[] securityName, byte[] engineId,
+                      String contextName, int requestId) {
+            return new Key(source, sourcePort, TrapNotification.Version.V3, digest(securityName),
+                    engineId == null ? "" : HexFormat.of().formatHex(engineId), contextName, requestId);
         }
 
         private static String digest(byte[] community) {

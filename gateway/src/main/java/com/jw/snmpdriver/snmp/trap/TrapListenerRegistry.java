@@ -117,6 +117,9 @@ public final class TrapListenerRegistry {
         Listener listener = listeners.get(port);
         if (listener == null) {
             listener = new Listener(port, address, license, newUsmStack());
+            if (listener.usm.informEnabled()) {
+                listener.router.v3Inform(listener.usm.localEngineId(), v3InformUnavailable());
+            }
             listeners.put(port, listener);
             listener.router.start();
             startLicenseWatch();
@@ -361,12 +364,24 @@ public final class TrapListenerRegistry {
         }
     }
 
-    /** One private stack per Listener, on the Gateway engine identity so v3 Informs (#36) can share it. */
+    /**
+     * One private stack per Listener, on the Gateway engine identity: v3 Informs authenticate under it. Users stay
+     * registered while the identity cannot back an Inform, so the router can say why it is not ACKed.
+     */
     private TrapUsmStack newUsmStack() {
         if (engineIdentity == null) {
             return new TrapUsmStack(org.snmp4j.mp.MPv3.createLocalEngineID(), 1);
         }
-        return new TrapUsmStack(engineIdentity.engineId(), engineIdentity.engineBoots());
+        return new TrapUsmStack(engineIdentity.engineId(), engineIdentity.engineBoots(), true);
+    }
+
+    /** Traps/LastError for a v3 Inform the identity cannot back (ADR 0009), or null when it can. */
+    private String v3InformUnavailable() {
+        if (engineIdentity.informAvailable()) {
+            return null;
+        }
+        String notice = engineIdentity.notice();
+        return notice != null ? notice : "Trap 本地引擎身份不可用，v3 Inform 已停用，不 ACK。";
     }
 
     synchronized TrapUsmStack usmStackOf(int port) {
