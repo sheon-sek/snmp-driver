@@ -9,9 +9,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -23,6 +26,7 @@ public final class TrapListenerRegistry {
     static final long RETRY_SECONDS = 30;
     static final long SOURCE_REFRESH_MINUTES = 5;
     static final long LICENSE_WATCH_SECONDS = 10;
+    static final int RESOLVE_QUEUE = 64;
 
     private final ListenerBinder binder;
     private final ScheduledExecutorService scheduler;
@@ -31,6 +35,8 @@ public final class TrapListenerRegistry {
     private final Map<Integer, Listener> listeners = new HashMap<>();
     private LicenseGate.Verdict lastVerdict;
     private ScheduledFuture<?> licenseWatch;
+    /** Host DNS runs here, so a slow lookup never occupies the shared polling scheduler. */
+    private volatile ExecutorService resolver;
 
     /** Treats every Notification as licensed and never polls the License; for tests and bind-only use. */
     public TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler) {
@@ -97,6 +103,7 @@ public final class TrapListenerRegistry {
         }
         if (recipient != null) {
             listener.router.add(recipient);
+            startResolver();
             ScheduledFuture<?> refresh = scheduleSourceRefresh(recipient);
             if (refresh != null) {
                 listener.refreshes.put(recipient, refresh);
@@ -109,6 +116,10 @@ public final class TrapListenerRegistry {
         if (licenseWatch != null) {
             licenseWatch.cancel(false);
             licenseWatch = null;
+        }
+        if (resolver != null) {
+            resolver.shutdownNow();
+            resolver = null;
         }
         for (Listener listener : new ArrayList<>(listeners.values())) {
             close(listener);
@@ -185,7 +196,20 @@ public final class TrapListenerRegistry {
         return new TrapListenerHandle(this, null, reason, null, null, null);
     }
 
-    /** Host DNS is re-resolved off the transport thread; the first run happens immediately. */
+    private void startResolver() {
+        if (resolver != null) {
+            return;
+        }
+        // one daemon thread and a bounded queue; refreshes beyond it are dropped until the next period
+        resolver = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(RESOLVE_QUEUE),
+                runnable -> {
+                    Thread thread = new Thread(runnable, "snmp-trap-dns");
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.DiscardPolicy());
+    }
+
+    /** The scheduler only triggers; host DNS is re-resolved on the resolver. The first run happens immediately. */
     private ScheduledFuture<?> scheduleSourceRefresh(TrapRecipient recipient) {
         Runnable refresh = () -> {
             TrapFilter filter = recipient.filter();
@@ -194,8 +218,19 @@ public final class TrapListenerRegistry {
                 recipient.notice().accept(filter.resolveError());
             }
         };
+        Runnable trigger = () -> {
+            ExecutorService current = resolver;
+            if (current == null) {
+                return;
+            }
+            try {
+                current.execute(refresh);
+            } catch (RejectedExecutionException ignored) {
+                // registry closed meanwhile
+            }
+        };
         try {
-            return scheduler.scheduleWithFixedDelay(refresh, 0, SOURCE_REFRESH_MINUTES, TimeUnit.MINUTES);
+            return scheduler.scheduleWithFixedDelay(trigger, 0, SOURCE_REFRESH_MINUTES, TimeUnit.MINUTES);
         } catch (RejectedExecutionException error) {
             return null;
         }

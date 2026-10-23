@@ -203,4 +203,34 @@ class TrapReceiveTest {
 
         assertTrue(joined.get(), "listener counters must be readable while close() holds the registry lock");
     }
+
+    @Test
+    void blockedDnsRefreshDoesNotStallTheScheduler() throws Exception {
+        java.util.concurrent.CountDownLatch lookupStarted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch releaseLookup = new java.util.concurrent.CountDownLatch(1);
+        TrapFilter filter = new TrapFilter("agent.example", "", "public".getBytes(StandardCharsets.UTF_8), host -> {
+            lookupStarted.countDown();
+            try {
+                releaseLookup.await();
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+            return new InetAddress[] {InetAddress.getLoopbackAddress()};
+        });
+        TrapRecipient blocked = new TrapRecipient("dev", filter, new TrapCounters(), new TokenBucket(1000),
+                notification -> { }, notice -> { }, true);
+        TrapListenerRegistry local = new TrapListenerRegistry((address, port) -> () -> { }, scheduler);
+        try {
+            local.acquire("dev", "127.0.0.1", freePort(), null, blocked);
+            assertTrue(lookupStarted.await(5, TimeUnit.SECONDS), "the refresh must start");
+
+            java.util.concurrent.CountDownLatch otherTask = new java.util.concurrent.CountDownLatch(1);
+            scheduler.execute(otherTask::countDown);
+
+            assertTrue(otherTask.await(3, TimeUnit.SECONDS), "a slow DNS lookup must not occupy the scheduler");
+        } finally {
+            releaseLookup.countDown();
+            local.closeAll();
+        }
+    }
 }
