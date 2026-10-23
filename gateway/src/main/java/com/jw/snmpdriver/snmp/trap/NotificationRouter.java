@@ -294,13 +294,7 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
             return false;
         }
         InformDeduplicator deduplicator = deduplicators.computeIfAbsent(recipient, key -> new InformDeduplicator(nanos));
-        int requestId = incoming.pdu().getRequestID().getValue();
-        InformDeduplicator.Key key = incoming.version() == TrapNotification.Version.V3
-                ? InformDeduplicator.Key.v3(incoming.source(), incoming.sourcePort(), incoming.community(),
-                        incoming.securityEngineId(), incoming.pdu() instanceof org.snmp4j.ScopedPDU scoped
-                                ? scoped.getContextName().toString() : "", requestId)
-                : new InformDeduplicator.Key(incoming.source(), incoming.sourcePort(), incoming.version(),
-                        incoming.community(), "", requestId);
+        InformDeduplicator.Key key = informKey(incoming);
         if (deduplicator.contains(key)) {
             recipient.counters().countDuplicateInform();
             return true;
@@ -310,6 +304,19 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
         }
         deduplicator.record(key);
         return true;
+    }
+
+    /** contextName enters the key as raw-byte hex: OctetString.toString renders binary and text alike. */
+    static InformDeduplicator.Key informKey(IncomingNotification incoming) {
+        int requestId = incoming.pdu().getRequestID().getValue();
+        if (incoming.version() != TrapNotification.Version.V3) {
+            return new InformDeduplicator.Key(incoming.source(), incoming.sourcePort(), incoming.version(),
+                    incoming.community(), "", requestId);
+        }
+        byte[] context = incoming.pdu() instanceof org.snmp4j.ScopedPDU scoped
+                ? scoped.getContextName().getValue() : new byte[0];
+        return InformDeduplicator.Key.v3(incoming.source(), incoming.sourcePort(), incoming.community(),
+                incoming.securityEngineId(), java.util.HexFormat.of().formatHex(context), requestId);
     }
 
     private void admit(TrapRecipient recipient, TrapNotification notification) {
