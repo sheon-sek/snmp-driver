@@ -311,6 +311,12 @@ public final class TrapDiagnostics {
         publish(Status.DEGRADED, reason + " " + REMEDIATION, "");
     }
 
+    /** Trap security this version cannot receive with; no listener is acquired. */
+    public synchronized void showUnsupported(String reason) {
+        handle = null;
+        publish(Status.DEGRADED, reason, "");
+    }
+
     /** Follows this handle; later registry changes arrive through {@link #refresh()}. */
     public synchronized void track(TrapListenerHandle tracked) {
         handle = tracked;

@@ -169,4 +169,34 @@ class SNMPDeviceTrapNodesTest {
         }
         assertEquals(Unsigned.ulong(0), fixture.value("Last/Sequence"));
     }
+
+    @Test
+    void usmTrapSecurityWithLegacyCommunityReceivesNothingAndAcksNoInform() throws Exception {
+        fixture = new SNMPDeviceFixture(true, "public", true, SNMPDeviceConfig.TrapSecurity.USM);
+
+        assertEquals("Degraded", fixture.value("Status"));
+        assertTrue(((String) fixture.value("LastError")).contains("USM"), (String) fixture.value("LastError"));
+        sendV2cTrap(fixture.trapPort, "public", "1.3.6.1.6.3.1.1.5.3", 1);
+
+        PDU inform = new PDU();
+        inform.setType(PDU.INFORM);
+        inform.add(new VariableBinding(SnmpConstants.sysUpTime, new TimeTicks(900)));
+        inform.add(new VariableBinding(SnmpConstants.snmpTrapOID, new OID("1.3.6.1.6.3.1.1.5.4")));
+        try (Snmp snmp = new Snmp(new DefaultUdpTransportMapping())) {
+            snmp.listen();
+            CommunityTarget<org.snmp4j.smi.Address> target = new CommunityTarget<>();
+            target.setAddress(GenericAddress.parse("udp:127.0.0.1/" + fixture.trapPort));
+            target.setCommunity(new OctetString("public"));
+            target.setVersion(SnmpConstants.version2c);
+            target.setTimeout(1500);
+            target.setRetries(0);
+            assertEquals(null, snmp.send(inform, target).getResponse(), "an Inform must not be acknowledged");
+        }
+
+        assertEquals(Unsigned.ulong(0), fixture.value("Last/Sequence"));
+        assertEquals("", fixture.value("Last/Json"));
+        assertEquals(Unsigned.ulong(0), fixture.value("ReceivedCount"));
+        assertEquals(Unsigned.ulong(0), fixture.value("AcceptedCount"));
+        assertEquals("Degraded", fixture.value("Status"));
+    }
 }

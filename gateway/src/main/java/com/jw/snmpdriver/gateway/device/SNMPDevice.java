@@ -404,6 +404,12 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             trapDiagnostics.showDisabled();
             return;
         }
+        if (config.trapSecurity() != SNMPDeviceConfig.TrapSecurity.COMMUNITY) {
+            // never fall back to a community receiver: that would accept v1/v2c and ACK Informs
+            trapDiagnostics.showUnsupported("USM Trap 接收将在后续版本提供，当前不接收 Notification"
+                    + "（不监听端口，不接收 v1/v2c，不确认 Inform）。");
+            return;
+        }
         try {
             Optional<TrapListenerRegistry> registry = services.trapRegistry();
             if (registry.isEmpty()) {
@@ -426,7 +432,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         }
     }
 
-    /** COMMUNITY mode only (M1b); the Trap Community falls back to the Read Community when empty. */
+    /** COMMUNITY mode only (M1b; USM is rejected before this); the Trap Community falls back to the Read Community when empty. */
     private TrapRecipient createTrapRecipient() throws SecretException {
         String community = secret(config.trapCommunity());
         if (community.isBlank()) {
