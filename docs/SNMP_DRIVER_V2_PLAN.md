@@ -57,6 +57,9 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 | Q24 | Last/* 一致读取契约：新增单值 `Traps/Last/Json`（含 sequence 与全部 Last 字段），现有 `Last/*` 保留为非原子镜像；`TRAP.*` 不做每 OID 快照。 | §4.7；`docs/adr/0008-last-json-consistent-read.md` |
 | Q25 | M1b 每个 Trap Listener 一个队列加一个 worker；流水线纯逻辑放 `snmp/trap`，自有 `CommandResponder`；Inform 命中多设备时至少一个入队即 ACK，去重先查询后写入（入队成功后）；Degraded 优先于 Unlicensed；出队时设备已删除或换代则静默丢弃；256 OID 满后不淘汰，其中 16 个槽位只给已订阅路径（无订阅时上限 240）。 | §4.5、§4.7、§4.9；ADR 0004 补充 |
 | Q26 | M1b 先做半天 spike 验证 JUnit 假 `DeviceContext`，再拆 5 个 ticket：接收骨架、准入控制、Inform、节点与接线、`TRAP.*` 路径；`SNMPDevice` 接线端到端测试用 JUnit 加 igdev 冒烟。 | §5 |
+| Q27 | M1c 本地引擎身份：身份文件记录机器指纹哈希，按 License 比例匹配规则检测克隆/换机，判定后重新生成 engineID（boots 从 1）并保留 `.cloned-<ts>`；采集不到标识时不判定；恢复备份只做 boots+1，手册说明 `notInTimeWindow` 处置；指纹由模块自动管理。 | §4.6；`docs/adr/0009-trap-engine-identity-clone-detection.md` |
+| Q28 | M1c 用户与安全：未配 `trapSenderEngineId` 的 v3 设备只收 Inform、`LastError` 说明；同 listener securityName 冲突只做运行期检查，冲突设备全部 Degraded 并列出设备名，不阻止保存；接收 noAuthNoPriv v3 Trap，手册标注安全等级同 v2c。 | §4.6；ADR 0003、0007 |
+| Q29 | M1c 交付沿用 M1b：spec Issue → 子票 → 集成分支 `m1c/v3-notifications` → Orca worker → 推送前 Codex 评审 → bump `1.1.0-beta2` 冒烟 → PR。M1-SET（§5.1.1）独立成票，M1d 前完成，不阻塞 M1c。 | §5 |
 
 ### 1.2 ADR
 
@@ -70,6 +73,7 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 - `docs/adr/0006-defer-mib-parsing.md`：推迟 MIB 解析，未来首选离线字典（D3）
 - `docs/adr/0007-cross-device-validation-runtime-first.md`：跨设备冲突以运行期复查为准（Q19）
 - `docs/adr/0008-last-json-consistent-read.md`：用单值 `Traps/Last/Json` 作为 Last 的一致读取契约（Q24）
+- `docs/adr/0009-trap-engine-identity-clone-detection.md`：按机器指纹检测克隆，恢复备份只做 boots+1（Q27）
 
 知识库中的 ADR 草稿（`draft` / `agent_access: deny`，等待人工审批）只作为副本，各自注明对应的仓库 ADR：
 
@@ -347,14 +351,15 @@ Notification 只归属已配置的 Device，不提供 Gateway 级「接收任意
   - 文件损坏：改名为 `.corrupt-<ts>` 备份，生成新的 engineID，记录 warn 日志，提示发送方需重新配置 engineID。
   - `engineBoots` 达到 2147483647 时停用 v3 Inform（RFC 3414 §2.2.2）。
   - boots 只在 Registry（引擎）初始化时递增，**与设备启动或配置保存无关**。
-  - config/local 包含在备份中，恢复时可选择是否恢复 local 内容。恢复旧备份可能使 boots 回退，克隆可能复制身份，不能以旧值加一保证超过远端记录。M1c 前必须细化恢复与克隆处理流程，验证恢复 local/不恢复 local 两种情况；不能自动清时间窗缓存绕过防重放。
+  - config/local 包含在备份中，恢复时可选择是否恢复 local 内容。恢复旧备份可能使 boots 回退，克隆可能复制身份，不能以旧值加一保证超过远端记录。恢复与克隆处理流程已定（Q27，ADR 0009）：文件另记 `machineFingerprint`（机器标识哈希），按 License 比例匹配规则比对，判定克隆/换机则重新生成 engineID、boots 从 1、旧文件改名 `.cloned-<ts>`；采集不到标识时不判定；恢复备份只做 boots+1，手册说明 `notInTimeWindow` 处置。M1c 系统测试需验证恢复 local/不恢复 local 两种情况；不能自动清时间窗缓存绕过防重放。
+  - 未配置 `trapSenderEngineId` 的 v3 设备只接收 v3 Inform，`LastError` 说明原因（Q28）。
   - 诊断节点 `Traps/LocalEngineId` 暴露 engineID（只读 hex），方便配置发送方。
 - **USM 隔离**：Trap 栈使用独立的 `SecurityProtocols`/`USM`/`MPv3`（做法同 M0-6），与轮询栈互不共享。
 - **用户注册**：
   - v3 Trap（Q4，`docs/adr/0003-v3-trap-requires-sender-engine-id.md`）：强制要求设备配置 `trapSenderEngineId`，用 `usm.addUser(user, senderEngineId)` 在注册时按固定 engineID 本地化；旧三参 API 已弃用；**不注册**可以按任意 engineID 现场本地化的用户（否则大量伪造 engineID 会造成 CPU 与内存消耗，相关逻辑见 `J/security/USM.java:349-386`）。已本地化用户的 grant 为 never。若预派生密钥再用六参 UsmUser 构造，auth/priv 参数必须为密钥而非普通口令；不能仅给未本地化通配用户设置 never 就期待自动派生。见调查记录 §5.4。
   - 设备 engineID 变化（换板、复位）后需重新配置 `trapSenderEngineId`。手册给出查询方法：对设备执行 `snmpget` 读取 `snmpEngineID.0`（`1.3.6.1.6.3.10.2.1.1.0`），例如 `snmpget -v 2c -c <community> <device-host> 1.3.6.1.6.3.10.2.1.1.0`，或 v3 下 `snmpget -v 3 -u <user> -l authPriv -a <auth-proto> -A <auth> -x <priv-proto> -X <priv> <device-host> 1.3.6.1.6.3.10.2.1.1.0`，把返回的 hex 填入 `trapSenderEngineId`。
   - v3 Inform：用户本地化到 Gateway 本地 engineID，不受 `trapSenderEngineId` 影响。
-- **冲突**：同一 listener 上相同 securityName 的认证在路由之前就完成，无法靠源 IP 区分。因此同一 listener 上同名 securityName 必须使用**同一** SecretConfig 引用和相同协议，否则保存时报错；运行期再做一次 plaintext 比对，不一致的设备 `Traps/Status=Degraded`。
+- **冲突**：同一 listener 上相同 securityName 的认证在路由之前就完成，无法靠源 IP 区分。因此同一 listener 上同名 securityName 必须使用**同一** SecretConfig 引用和相同协议，M1c 只做运行期检查（Q28，同 ADR 0007）：比对 SecretConfig 引用、协议与 plaintext，冲突的设备全部 `Traps/Status=Degraded`，`LastError` 列出冲突设备名，不阻止保存。noAuthNoPriv 的 v3 Trap 接收，手册标注其安全等级同 v2c。
 - **时间窗**：认证路径由 `UsmTimeTable` 跟踪。远端 boots 增大可更新，回退拒绝；相同 boots 下超窗旧包拒绝，但窗口内重复包可能通过，不能当逐包去重。Inform 的本地权威时间窗与 Trap 的远端权威时间窗分开验收，noAuthNoPriv 不套用认证防重放保证；厂商互通仍待实测。见调查记录 §5.3。
 
 ### 4.7 OPC 节点模型（快照与逐条事件的语义边界）
@@ -507,6 +512,18 @@ Docker: publish -p 162:10162/udp and set Trap Port to 10162.
 - M0：§3 中 M0 范围（Q13）各项验收全部通过，且 `./gradlew :gateway:test` 通过（worker 已获长期授权运行，Q16）。
 - M1：§6 系统测试矩阵全部通过，风暴测试达到 §6.4 的阈值；**硬性条件**：1.0.0 设备配置在 igdev 导入并升级到 1.1.0 后不改即可加载，Trap 默认关闭，轮询不变（Q12）。系统测试与风暴测试每次执行前需询问用户（Q16）。
 
+### 5.1.1 新增后续步骤：M1-SET，Designer 写入失败调查与修复
+
+记录日期：2026-10-23。来源：用户在当前 Trap 分支 `m1b/receive-pipeline` 上手动检查 igdev Gateway。
+
+- **用户报告**：在 Designer 写入 `SNMP_Manual/V2C/Integer32.value` 时提示 `Error writing to Integer32.value: Bad_GatewayCommOff`。
+- **关联对象**：Device `M0_E2E_V2C`，动态路径 `RW.Integer32/1.3.6.1.4.1.53864.1.0`；手动检查入口为 Designer → Gateway → OPC UA → SNMP SET → 模拟设备 → 轮询回读。
+- **证据边界**：以上错误来自用户报告，本次未复现；尚未确定写请求是否到达 Gateway、OPC UA 或模拟设备，也没有证明是 Trap 引入的回归。设备 Running、GET 成功或旧 Quick Client 写入成功，都不能替代本次 Designer 写入验收。
+- **步骤范围**：保留复现条件并定位首个失败环节，按证据修复模块、配置或测试环境；恢复合法 V2C Integer32 写入与回读，并保留读写权限和 License 检查。
+- **排期建议，待确认**：独立于 M1b Notification 任务，不作为 M1c 实现的前置；在 M1d 发布验收前完成。只建立一个可独立验收的工作项，不按协议层横向拆票；工期待定位后估算，不修改现有工期合计。
+- **验收建议，待确认**：以真实 Designer 写入及回读为最高测试入口；用现有 Device/SNMP 请求边界补充最小自动回归，验证修复前失败、修复后通过。补查 Trap 关闭及开启时轮询/SET 行为，确认 Notification 仍保持只读语义。
+- **执行限制**：当前只记录和准备 Issue，不实施修复，不执行 Verification。Issue 草稿待技能规定的测试入口及拆票确认后发布，标签 `ready-for-agent`、`wayfinder:task`。
+
 ### 5.2 风险
 
 | 风险 | 影响 | 缓解 |
@@ -521,7 +538,7 @@ Docker: publish -p 162:10162/udp and set Trap Port to 10162.
 
 ### 5.3 调查结论与剩余实测
 
-原十项已由 [M0-S 调查记录](research/M0S_CONTRACT_FINDINGS.md) 覆盖。下列条目保留为原调查索引，不能把它们全部视为未调查或已经实测。静态结论以该记录各节为准；待执行项、授权边界见记录末尾清单。M1a 资源校验入口、M1b 一致快照读取契约、M1c 恢复/克隆身份流程需在对应里程碑编码前落定。
+原十项已由 [M0-S 调查记录](research/M0S_CONTRACT_FINDINGS.md) 覆盖。下列条目保留为原调查索引，不能把它们全部视为未调查或已经实测。静态结论以该记录各节为准；待执行项、授权边界见记录末尾清单。M1a 资源校验入口、M1b 一致快照读取契约（ADR 0008）、M1c 恢复/克隆身份流程（ADR 0009）均已落定。
 
 ### 5.3.1 原调查索引
 
