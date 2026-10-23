@@ -29,6 +29,11 @@ public final class TrapListenerHandle {
         return rejection;
     }
 
+    /** Same-listener securityName conflict naming the other Devices; null when none (#37). */
+    public String conflict() {
+        return listener == null ? null : registry.conflictOf(listener, recipient);
+    }
+
     public TrapListenerState state() {
         return listener == null ? TrapListenerState.CLOSED : registry.stateOf(listener);
     }

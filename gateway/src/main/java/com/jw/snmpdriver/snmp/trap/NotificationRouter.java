@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.snmp4j.PDU;
 import org.snmp4j.PDUv1;
+import org.snmp4j.mp.SnmpConstants;
 import org.snmp4j.smi.OID;
 import org.snmp4j.smi.TimeTicks;
 import org.snmp4j.smi.VariableBinding;
@@ -44,6 +45,10 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
     private final Map<InetAddress, UnmatchedLog> unmatchedLog = new ConcurrentHashMap<>();
     private final Map<TrapRecipient, InformDeduplicator> deduplicators = new ConcurrentHashMap<>();
     private final LongSupplier nanos;
+    /** The Gateway engine v3 Informs are authenticated under; null while this Listener takes no v3 Inform. */
+    private volatile byte[] localEngineId;
+    /** Traps/LastError for every v3 Inform while the engine identity cannot back one (ADR 0009); else null. */
+    private volatile String v3InformUnavailable;
 
     NotificationRouter(int port, Supplier<LicenseGate.Verdict> license) {
         this(port, license, QUEUE_CAPACITY);
@@ -60,6 +65,12 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
         this.queue = new ArrayBlockingQueue<>(queueCapacity);
         this.worker = new Thread(this::drain, "snmp-trap-" + port);
         this.worker.setDaemon(true);
+    }
+
+    /** v3 Informs are addressed to {@code localEngineId}; a non-null {@code unavailable} refuses to ACK them. */
+    void v3Inform(byte[] localEngineId, String unavailable) {
+        this.localEngineId = localEngineId == null ? null : localEngineId.clone();
+        this.v3InformUnavailable = unavailable;
     }
 
     /** One worker per Listener: Devices are served in arrival order and never on the transport thread. */
@@ -153,11 +164,11 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
         boolean acknowledge = false;
         for (TrapRecipient recipient : matched) {
             try {
-                if (!recipient.filter().authenticate(incoming.community())) {
+                String failure = authenticate(recipient, incoming);
+                if (failure != null) {
                     recipient.counters().countAuthFailure();
                     recipient.notice().accept("来自 " + incoming.source().getHostAddress()
-                            + " 的 Notification 认证失败：community 不匹配。请检查 Trap Community"
-                            + "（为空时使用 Read Community）。");
+                            + " 的 Notification 认证失败：" + failure);
                     continue;
                 }
                 if (!parsed) {
@@ -172,6 +183,9 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
                 recipient.counters().countReceived();
                 if (incoming.ack() == null) {
                     admit(recipient, notification);
+                } else if (incoming.version() == TrapNotification.Version.V3 && v3InformUnavailable != null) {
+                    // the sender retries; ACKing under an identity that cannot be kept would break RFC 3414
+                    recipient.notice().accept(v3InformUnavailable);
                 } else if (recipient.acceptInform()) {
                     acknowledge |= admitInform(recipient, incoming, notification);
                 }
@@ -187,6 +201,89 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
     }
 
     /**
+     * Null when {@code recipient} accepts this message's security, else the operator-facing reason. A v3 message
+     * has already passed USM; here it must also be this Device's user, sender engine and at least its level,
+     * because USM authenticates before routing and cannot tell Devices apart (§4.6).
+     */
+    private String authenticate(TrapRecipient recipient, IncomingNotification incoming) {
+        TrapV3User user = recipient.v3User();
+        if (incoming.version() != TrapNotification.Version.V3) {
+            if (user != null) {
+                return "设备 Trap Security 为 USM，不接收 v1/v2c Notification。";
+            }
+            return recipient.filter().authenticate(incoming.community()) ? null
+                    : "community 不匹配。请检查 Trap Community（为空时使用 Read Community）。";
+        }
+        if (user == null) {
+            return "设备 Trap Security 为 COMMUNITY，不接收 v3 Notification。";
+        }
+        if (!java.util.Arrays.equals(user.securityName().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                incoming.community())) {
+            return "securityName 与设备配置不一致。";
+        }
+        if (incoming.pdu().getType() == PDU.INFORM) {
+            // the receiver is authoritative for an Inform: a sender engineID here is a Trap user misused
+            if (!java.util.Arrays.equals(localEngineId, incoming.securityEngineId())) {
+                return "v3 Inform 的 engineID 不是 Gateway 本地 engineID（Traps/LocalEngineId），请让发送方重新 discovery。";
+            }
+        } else {
+            if (!user.receivesTraps()) {
+                return TrapV3User.NO_SENDER_ENGINE_ID;
+            }
+            if (!java.util.Arrays.equals(user.senderEngineId(), incoming.securityEngineId())) {
+                return "发送方 engineID 与 Trap Sender Engine ID 不一致。";
+            }
+        }
+        if (incoming.securityLevel() < user.securityLevel()) {
+            return "安全级别低于设备配置的 Security Level。";
+        }
+        return null;
+    }
+
+    /** USM rejected a v3 message before routing; it counts for the USM Devices that own the source. */
+    @Override
+    public void onAuthenticationFailure(InetAddress source, int status) {
+        onAuthenticationFailure(source, status, false);
+    }
+
+    @Override
+    public void onAuthenticationFailure(InetAddress source, int status, boolean toLocalEngine) {
+        try {
+            String unavailable = v3InformUnavailable;
+            String reason = toLocalEngine && unavailable != null ? unavailable
+                    : toLocalEngine && status == SnmpConstants.SNMPv3_USM_NOT_IN_TIME_WINDOW
+                    ? "v3 Inform 超出 Gateway 本地时间窗（engineBoots/engineTime 不一致），已按防重放拒绝；"
+                    + "发送方需重新 discovery 或清除其引擎缓存。"
+                    : usmFailure(status);
+            for (TrapRecipient recipient : recipients) {
+                if (recipient.v3User() != null && recipient.filter().matchesSource(source)) {
+                    recipient.counters().countAuthFailure();
+                    recipient.notice().accept("来自 " + source.getHostAddress() + " 的 v3 Notification 认证失败："
+                            + reason);
+                }
+            }
+        } catch (RuntimeException error) {
+            logger.warn("Failed to count USM failure port={} source={} category=trap", port, source, error);
+        }
+    }
+
+    static String usmFailure(int status) {
+        return switch (status) {
+            case SnmpConstants.SNMPv3_USM_UNKNOWN_ENGINEID ->
+                    "未知的发送方 engineID。请确认 Trap Sender Engine ID 与设备 snmpEngineID.0 一致。";
+            case SnmpConstants.SNMPv3_USM_NOT_IN_TIME_WINDOW ->
+                    "报文超出时间窗（engineBoots/engineTime 回退或过旧），已按防重放拒绝。";
+            case SnmpConstants.SNMPv3_USM_UNKNOWN_SECURITY_NAME, SnmpConstants.SNMP_MP_WRONG_USER_NAME ->
+                    "未知的 securityName。请检查 Security Name 与 Trap Sender Engine ID。";
+            case SnmpConstants.SNMPv3_USM_UNSUPPORTED_SECURITY_LEVEL ->
+                    "安全级别与设备配置的 Security Level 不一致。";
+            case SnmpConstants.SNMPv3_USM_AUTHENTICATION_FAILURE, SnmpConstants.SNMPv3_USM_AUTHENTICATION_ERROR ->
+                    "认证摘要不匹配。请检查 Auth Protocol 与 Auth Passphrase。";
+            default -> "USM 拒绝（status=" + status + "）。";
+        };
+    }
+
+    /**
      * Inform: ACK once if any Device queued it or already had it. The dedup lookup precedes the rate limit
      * (a retransmission costs no token) and the write follows the offer, so an Inform that failed to queue is
      * never mistaken for a duplicate when the sender retries (ADR 0004).
@@ -197,8 +294,7 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
             return false;
         }
         InformDeduplicator deduplicator = deduplicators.computeIfAbsent(recipient, key -> new InformDeduplicator(nanos));
-        InformDeduplicator.Key key = new InformDeduplicator.Key(incoming.source(), incoming.sourcePort(),
-                incoming.version(), incoming.community(), "", incoming.pdu().getRequestID().getValue());
+        InformDeduplicator.Key key = informKey(incoming);
         if (deduplicator.contains(key)) {
             recipient.counters().countDuplicateInform();
             return true;
@@ -208,6 +304,19 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
         }
         deduplicator.record(key);
         return true;
+    }
+
+    /** contextName enters the key as raw-byte hex: OctetString.toString renders binary and text alike. */
+    static InformDeduplicator.Key informKey(IncomingNotification incoming) {
+        int requestId = incoming.pdu().getRequestID().getValue();
+        if (incoming.version() != TrapNotification.Version.V3) {
+            return new InformDeduplicator.Key(incoming.source(), incoming.sourcePort(), incoming.version(),
+                    incoming.community(), "", requestId);
+        }
+        byte[] context = incoming.pdu() instanceof org.snmp4j.ScopedPDU scoped
+                ? scoped.getContextName().getValue() : new byte[0];
+        return InformDeduplicator.Key.v3(incoming.source(), incoming.sourcePort(), incoming.community(),
+                incoming.securityEngineId(), java.util.HexFormat.of().formatHex(context), requestId);
     }
 
     private void admit(TrapRecipient recipient, TrapNotification notification) {

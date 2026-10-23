@@ -36,6 +36,19 @@ tasks.matching {
     outputs.upToDateWhen { false }
 }
 
+// collectModlDependencies 不感知子项目版本变化，会留下旧版本 jar 并被打进 modl。
+subprojects {
+    tasks.matching { it.name == "collectModlDependencies" }.configureEach {
+        outputs.upToDateWhen { false }
+        doFirst {
+            layout.buildDirectory.dir("artifacts").get().asFile
+                .listFiles()
+                ?.findAll { it.isFile() && it.name.endsWith(".jar") }
+                ?.each { it.delete() }
+        }
+    }
+}
+
 ignitionModule {
     requiredIgnitionVersion = property('ignitionVersion')
 

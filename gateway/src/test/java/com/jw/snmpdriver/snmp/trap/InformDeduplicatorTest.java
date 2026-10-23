@@ -1,5 +1,6 @@
 package com.jw.snmpdriver.snmp.trap;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -56,5 +57,19 @@ class InformDeduplicatorTest {
         assertNotEquals(base, otherCommunity);
         assertNotEquals(base, otherPort);
         assertFalse(base.toString().contains("public"));
+    }
+
+    @Test
+    void v3KeyIsSecurityNameAndEngineIdPlusContext() throws Exception {
+        InetAddress source = InetAddress.getByName("10.0.0.1");
+        byte[] name = "informuser".getBytes(StandardCharsets.UTF_8);
+        byte[] engine = {(byte) 0x80, 0, 0x1f, (byte) 0x88, 1};
+        InformDeduplicator.Key base = InformDeduplicator.Key.v3(source, 40000, name, engine, "", 9);
+        assertEquals(base, InformDeduplicator.Key.v3(source, 40000, name, engine.clone(), "", 9));
+        assertNotEquals(base, InformDeduplicator.Key.v3(source, 40000, name, new byte[] {1, 2, 3, 4, 5}, "", 9));
+        assertNotEquals(base, InformDeduplicator.Key.v3(source, 40000, "other".getBytes(StandardCharsets.UTF_8),
+                engine, "", 9));
+        assertNotEquals(base, InformDeduplicator.Key.v3(source, 40000, name, engine, "ctx", 9));
+        assertNotEquals(base, new InformDeduplicator.Key(source, 40000, TrapNotification.Version.V3, name, "", 9));
     }
 }

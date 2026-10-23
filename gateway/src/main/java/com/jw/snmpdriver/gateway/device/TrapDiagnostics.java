@@ -43,6 +43,7 @@ public final class TrapDiagnostics {
     static final String STATUS = "Status";
     static final String LAST_ERROR = "LastError";
     static final String LISTENER_ENDPOINT = "ListenerEndpoint";
+    static final String LOCAL_ENGINE_ID = "LocalEngineId";
     static final String OVERFLOW_COUNT = "OverflowCount";
     static final String LAST_FOLDER = "Last";
     static final String LAST_SEQUENCE = "Last/Sequence";
@@ -90,6 +91,7 @@ public final class TrapDiagnostics {
         NODES.put(STATUS, NodeType.STRING);
         NODES.put(LAST_ERROR, NodeType.STRING);
         NODES.put(LISTENER_ENDPOINT, NodeType.STRING);
+        NODES.put(LOCAL_ENGINE_ID, NodeType.STRING);
         for (String name : new String[] {"ReceivedCount", "AcceptedCount", "DroppedRateLimitCount",
                 "DroppedQueueFullCount", "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount",
                 "ListenerUnmatchedCount", "ListenerMultiMatchCount"}) {
@@ -142,6 +144,11 @@ public final class TrapDiagnostics {
     private TrapListenerHandle handle;
     private boolean nodesCreated;
     private String lastNotice;
+    /** Gateway-wide engine identity hint (clone, corrupt file, write failure); appended to every LastError. */
+    private String identityNotice = "";
+    /** Standing configuration limit (e.g. no v3 Trap without a sender engineID); hidden while Disabled. */
+    private String configNotice = "";
+    private String engineIdHex = "";
     private NodeWriter writer;
 
     TrapDiagnostics(BiConsumer<String, Object> sink) {
@@ -298,7 +305,20 @@ public final class TrapDiagnostics {
         }
         writer.createUnder(root);
         nodesCreated = true;
+        sink.accept(LOCAL_ENGINE_ID, engineIdHex);
         showDisabled();
+    }
+
+    /** Gateway-wide local engineID (hex) and its operator notice, if any; shown on every Device. */
+    public synchronized void showEngineIdentity(String engineIdHex, String notice) {
+        this.engineIdHex = engineIdHex;
+        identityNotice = notice == null ? "" : notice;
+        sink.accept(LOCAL_ENGINE_ID, engineIdHex);
+    }
+
+    /** Set before {@link #track}; it accompanies every non-Disabled status until replaced. */
+    public synchronized void showConfigNotice(String notice) {
+        configNotice = notice == null ? "" : notice;
     }
 
     public synchronized void showDisabled() {
@@ -309,12 +329,6 @@ public final class TrapDiagnostics {
     public synchronized void showUnavailable(String reason) {
         handle = null;
         publish(Status.DEGRADED, reason + " " + REMEDIATION, "");
-    }
-
-    /** Trap security this version cannot receive with; no listener is acquired. */
-    public synchronized void showUnsupported(String reason) {
-        handle = null;
-        publish(Status.DEGRADED, reason, "");
     }
 
     /** Follows this handle; later registry changes arrive through {@link #refresh()}. */
@@ -338,6 +352,10 @@ public final class TrapDiagnostics {
             return;
         }
         String endpoint = current.endpoint() == null ? "" : current.endpoint();
+        if (current.conflict() != null) {
+            publish(Status.DEGRADED, current.conflict(), endpoint);
+            return;
+        }
         switch (current.state()) {
             case BOUND -> {
                 // Degraded outranks Unlicensed: without a bound port there is nothing to license
@@ -359,7 +377,8 @@ public final class TrapDiagnostics {
      * Listening and only when the text changes, so a flood of bad packets writes the node once.
      */
     public synchronized void notice(String message) {
-        if (handle == null || handle.isRejected() || handle.state() != TrapListenerState.BOUND
+        if (handle == null || handle.isRejected() || handle.conflict() != null
+                || handle.state() != TrapListenerState.BOUND
                 || message.equals(lastNotice)) {
             return;
         }
@@ -376,8 +395,12 @@ public final class TrapDiagnostics {
             case NOT_AVAILABLE -> new StatusCode(StatusCodes.Bad_LicenseNotAvailable);
         });
         sink.accept(STATUS, status.text);
-        sink.accept(LAST_ERROR, error);
+        sink.accept(LAST_ERROR, join(join(error, status == Status.DISABLED ? "" : configNotice), identityNotice));
         sink.accept(LISTENER_ENDPOINT, endpoint);
+    }
+
+    private static String join(String first, String second) {
+        return first.isEmpty() ? second : second.isEmpty() ? first : first + " " + second;
     }
 
     private static final class NodeWriter {

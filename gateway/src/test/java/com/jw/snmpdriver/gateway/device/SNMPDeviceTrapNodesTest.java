@@ -86,6 +86,18 @@ class SNMPDeviceTrapNodesTest {
         for (String name : LAST) {
             assertTrue(fixture.read("Last/" + name).getStatusCode().isGood(), name);
         }
+        assertTrue(((String) fixture.value("LocalEngineId")).matches("[0-9a-f]{10,64}"));
+    }
+
+    @Test
+    void localEngineIdExistsWithTrapDisabledAndMatchesTheIdentityFile() throws Exception {
+        fixture = new SNMPDeviceFixture(false, "public", true);
+
+        java.util.Properties stored = new java.util.Properties();
+        try (var reader = java.nio.file.Files.newBufferedReader(fixture.engineIdentityFile())) {
+            stored.load(reader);
+        }
+        assertEquals(stored.getProperty("engineId"), fixture.value("LocalEngineId"));
     }
 
     @Test
@@ -171,11 +183,12 @@ class SNMPDeviceTrapNodesTest {
     }
 
     @Test
-    void usmTrapSecurityWithLegacyCommunityReceivesNothingAndAcksNoInform() throws Exception {
+    void usmTrapSecurityWithoutSenderEngineIdListensButRefusesCommunityAndAcksNoInform() throws Exception {
         fixture = new SNMPDeviceFixture(true, "public", true, SNMPDeviceConfig.TrapSecurity.USM);
 
-        assertEquals("Degraded", fixture.value("Status"));
-        assertTrue(((String) fixture.value("LastError")).contains("USM"), (String) fixture.value("LastError"));
+        assertEquals("Listening", fixture.value("Status"));
+        assertTrue(((String) fixture.value("LastError")).contains("Trap Sender Engine ID"),
+                (String) fixture.value("LastError"));
         sendV2cTrap(fixture.trapPort, "public", "1.3.6.1.6.3.1.1.5.3", 1);
 
         PDU inform = new PDU();
@@ -197,6 +210,28 @@ class SNMPDeviceTrapNodesTest {
         assertEquals("", fixture.value("Last/Json"));
         assertEquals(Unsigned.ulong(0), fixture.value("ReceivedCount"));
         assertEquals(Unsigned.ulong(0), fixture.value("AcceptedCount"));
-        assertEquals("Degraded", fixture.value("Status"));
+        assertEquals("Listening", fixture.value("Status"));
+    }
+
+    @Test
+    void v3TrapFromTheConfiguredSenderEngineUpdatesLastNodesAndCounters() throws Exception {
+        String engineHex = "80001f8880aabbccdd02";
+        fixture = new SNMPDeviceFixture(true, "", true, SNMPDeviceConfig.TrapSecurity.USM, engineHex);
+        await("listener Listening", () -> "Listening".equals(fixture.value("Status")));
+        assertEquals("", fixture.value("LastError"));
+
+        com.jw.snmpdriver.snmp.trap.TrapV3ReceiveTest.sendV3(fixture.trapPort,
+                java.util.HexFormat.of().parseHex(engineHex), 1, "probe",
+                org.snmp4j.security.SecurityLevel.NOAUTH_NOPRIV, null, null);
+        await("Sequence 1", () -> sequenceIs(fixture, 1));
+
+        assertEquals("V3", fixture.value("Last/Version"));
+        assertEquals("V2_TRAP", fixture.value("Last/PduType"));
+        assertEquals("1.3.6.1.6.3.1.1.5.4", fixture.value("Last/TrapOid"));
+        assertTrue(((String) fixture.value("Last/Json")).contains("\"version\":\"V3\""));
+        assertEquals(Unsigned.ulong(1), fixture.readPath("TRAP.Count/1.3.6.1.6.3.1.1.5.4").getValue().getValue());
+        await("counters flushed", () -> Unsigned.ulong(1).equals(fixture.value("AcceptedCount")));
+        assertEquals(Unsigned.ulong(1), fixture.value("ReceivedCount"));
+        assertEquals(Unsigned.ulong(0), fixture.value("AuthFailureCount"));
     }
 }

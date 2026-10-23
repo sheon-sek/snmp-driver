@@ -402,4 +402,41 @@ class TrapDiagnosticsTest {
         assertEquals("", nodes.get("Last/Json"));
         assertTrue(licensed.readTrapPath(COUNT_PATH).getStatusCode().isGood());
     }
+
+    @Test
+    void localEngineIdIsShownAndItsNoticeSurvivesStatusChanges() {
+        diagnostics.showEngineIdentity("80001f01", "检测到 Gateway 被克隆");
+        assertEquals("80001f01", nodes.get("LocalEngineId"));
+
+        diagnostics.showDisabled();
+        assertEquals("检测到 Gateway 被克隆", nodes.get("LastError"));
+
+        diagnostics.showUnavailable("注册表不可用");
+        assertTrue(nodes.get("LastError").toString().startsWith("注册表不可用 "));
+        assertTrue(nodes.get("LastError").toString().endsWith(" 检测到 Gateway 被克隆"));
+    }
+
+    @Test
+    void localEngineIdWithoutNoticeLeavesLastErrorEmpty() {
+        diagnostics.showEngineIdentity("80001f01", null);
+        diagnostics.showDisabled();
+
+        assertEquals("80001f01", nodes.get("LocalEngineId"));
+        assertEquals("", nodes.get("LastError"));
+    }
+
+    @Test
+    void configNoticeStaysWhileListeningAndLeavesWithDisabled() {
+        diagnostics.showConfigNotice("未配置 Trap Sender Engine ID，不接收 v3 Trap。");
+        TrapListenerRegistry registry = registry();
+        diagnostics.track(registry.acquire("dev", "127.0.0.1", 10162, diagnostics::refresh));
+
+        assertEquals("Listening", nodes.get("Status"));
+        assertEquals("未配置 Trap Sender Engine ID，不接收 v3 Trap。", nodes.get("LastError"));
+        diagnostics.refresh();
+        assertEquals("未配置 Trap Sender Engine ID，不接收 v3 Trap。", nodes.get("LastError"));
+
+        diagnostics.showDisabled();
+        assertEquals("", nodes.get("LastError"));
+    }
 }

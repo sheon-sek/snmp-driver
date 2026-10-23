@@ -1,6 +1,7 @@
 package com.jw.snmpdriver.snmp.trap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.InetAddress;
@@ -90,6 +91,26 @@ class NotificationRouterInformTest {
         }
         router.start();
         return devices[0];
+    }
+
+    private static IncomingNotification v3Inform(byte[] contextName) throws Exception {
+        org.snmp4j.ScopedPDU pdu = new org.snmp4j.ScopedPDU();
+        pdu.setType(PDU.INFORM);
+        pdu.setRequestID(new Integer32(7));
+        pdu.setContextName(new org.snmp4j.smi.OctetString(contextName));
+        return new IncomingNotification(InetAddress.getByName("10.0.0.1"), 40000, TrapNotification.Version.V3,
+                "informuser".getBytes(StandardCharsets.UTF_8), pdu, null, new byte[] {(byte) 0x80, 0, 0x1F, 1, 2},
+                org.snmp4j.security.SecurityLevel.AUTH_PRIV);
+    }
+
+    @Test
+    void binaryContextNameNeverCollidesWithPrintableTextInTheDedupKey() throws Exception {
+        byte[] binary = {0x01, 0x02};
+        byte[] text = "01:02".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(NotificationRouter.informKey(v3Inform(binary)), NotificationRouter.informKey(v3Inform(binary.clone())));
+        assertNotEquals(NotificationRouter.informKey(v3Inform(binary)), NotificationRouter.informKey(v3Inform(text)));
+        assertNotEquals(NotificationRouter.informKey(v3Inform(new byte[0])),
+                NotificationRouter.informKey(v3Inform(new byte[] {0})));
     }
 
     @Test
