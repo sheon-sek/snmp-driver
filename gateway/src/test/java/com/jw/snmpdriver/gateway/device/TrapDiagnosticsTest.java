@@ -97,6 +97,14 @@ class TrapDiagnosticsTest {
     }
 
     @Test
+    void boundListenerBeforeLicenseIsVerifiedDoesNotShowUnlicensed() {
+        TrapDiagnostics pending = new TrapDiagnostics(nodes::put, () -> LicenseGate.Verdict.PENDING);
+        pending.track(registry().acquire("dev-a", "0.0.0.0", 10162, pending::refresh));
+
+        assertEquals("Listening", nodes.get("Status"));
+    }
+
+    @Test
     void degradedOutranksUnlicensed() {
         TrapDiagnostics licensed = new TrapDiagnostics(nodes::put, () -> LicenseGate.Verdict.NOT_AVAILABLE);
         failures = 1;

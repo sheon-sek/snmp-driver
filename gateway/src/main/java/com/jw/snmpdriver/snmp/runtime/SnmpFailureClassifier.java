@@ -219,6 +219,7 @@ public final class SnmpFailureClassifier {
             case "shutdown" -> "SNMP operation was cancelled by shutdown or generation change";
             case "resource" -> "SNMP runtime resource is unavailable";
             case "license" -> "SNMP Driver license is not valid";
+            case "license-pending" -> "Waiting for SNMP Driver license verification";
             case "configuration" -> "SNMP configuration is invalid";
             case "message-processing" -> "SNMP message processing failed";
             default -> "Unexpected SNMP runtime failure";
