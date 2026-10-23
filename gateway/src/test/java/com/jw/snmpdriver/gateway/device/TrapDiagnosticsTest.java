@@ -349,4 +349,57 @@ class TrapDiagnosticsTest {
         assertEquals(1L, nodes.get("Last/Sequence"));
         assertTrue(text("Last/Json").startsWith("{\"sequence\":1,"));
     }
+
+    private static final com.jw.snmpdriver.snmp.address.TrapItemPath COUNT_PATH =
+            new com.jw.snmpdriver.snmp.address.TrapItemPath(com.jw.snmpdriver.snmp.address.TrapItemPath.Field.COUNT,
+                    com.jw.snmpdriver.snmp.address.NumericOid.parse("1.3.6.1.6.3.1.1.5.3"));
+
+    private long quality(String name) {
+        return nodes.get(name) instanceof org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode code
+                ? code.getValue() : 0L;
+    }
+
+    @Test
+    void lastNodesFollowLicenseWhileBindFailureKeepsStatusDegraded() {
+        java.util.concurrent.atomic.AtomicReference<LicenseGate.Verdict> verdict =
+                new java.util.concurrent.atomic.AtomicReference<>(LicenseGate.Verdict.NOT_AVAILABLE);
+        TrapDiagnostics licensed = new TrapDiagnostics(nodes::put, verdict::get);
+        failures = 1;
+        licensed.track(registry().acquire("dev-a", "0.0.0.0", 162, licensed::refresh));
+
+        assertEquals("Degraded", nodes.get("Status"));
+        assertEquals(org.eclipse.milo.opcua.stack.core.StatusCodes.Bad_LicenseNotAvailable, quality("Last/Json"));
+        assertEquals(org.eclipse.milo.opcua.stack.core.StatusCodes.Bad_LicenseNotAvailable, quality("Last/Sequence"));
+
+        verdict.set(LicenseGate.Verdict.EXPIRED);
+        licensed.refresh();
+        assertEquals("Degraded", nodes.get("Status"));
+        assertEquals(org.eclipse.milo.opcua.stack.core.StatusCodes.Bad_LicenseExpired, quality("Last/Json"));
+
+        verdict.set(LicenseGate.Verdict.LICENSED);
+        licensed.refresh();
+        assertEquals("Degraded", nodes.get("Status"));
+        assertEquals("", nodes.get("Last/Json"));
+    }
+
+    @Test
+    void lastNodesFollowLicenseOnRejectedHandle() {
+        java.util.concurrent.atomic.AtomicReference<LicenseGate.Verdict> verdict =
+                new java.util.concurrent.atomic.AtomicReference<>(LicenseGate.Verdict.NOT_AVAILABLE);
+        TrapDiagnostics licensed = new TrapDiagnostics(nodes::put, verdict::get);
+        TrapListenerRegistry registry = registry();
+        registry.acquire("dev-a", "0.0.0.0", 10162);
+        licensed.track(registry.acquire("dev-b", "127.0.0.1", 10162, licensed::refresh));
+
+        assertEquals("Degraded", nodes.get("Status"));
+        assertEquals(org.eclipse.milo.opcua.stack.core.StatusCodes.Bad_LicenseNotAvailable, quality("Last/Json"));
+        assertEquals(org.eclipse.milo.opcua.stack.core.StatusCodes.Bad_LicenseNotAvailable,
+                licensed.readTrapPath(COUNT_PATH).getStatusCode().getValue());
+
+        verdict.set(LicenseGate.Verdict.LICENSED);
+        licensed.refresh();
+        assertEquals("Degraded", nodes.get("Status"));
+        assertEquals("", nodes.get("Last/Json"));
+        assertTrue(licensed.readTrapPath(COUNT_PATH).getStatusCode().isGood());
+    }
 }

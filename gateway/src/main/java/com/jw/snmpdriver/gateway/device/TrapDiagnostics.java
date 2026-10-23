@@ -336,11 +336,6 @@ public final class TrapDiagnostics {
             case BOUND -> {
                 // Degraded outranks Unlicensed: without a bound port there is nothing to license
                 LicenseGate.Verdict verdict = license.get();
-                applyLastQuality(switch (verdict) {
-                    case LICENSED -> null;
-                    case EXPIRED -> new StatusCode(StatusCodes.Bad_LicenseExpired);
-                    case NOT_AVAILABLE -> new StatusCode(StatusCodes.Bad_LicenseNotAvailable);
-                });
                 if (verdict == LicenseGate.Verdict.LICENSED) {
                     publish(Status.LISTENING, "", endpoint);
                 } else {
@@ -368,9 +363,12 @@ public final class TrapDiagnostics {
 
     private void publish(Status status, String error, String endpoint) {
         lastNotice = null;
-        if (status != Status.UNLICENSED) {
-            applyLastQuality(null);
-        }
+        // Quality follows the License alone; Status still lets Degraded outrank Unlicensed
+        applyLastQuality(switch (license.get()) {
+            case LICENSED -> null;
+            case EXPIRED -> new StatusCode(StatusCodes.Bad_LicenseExpired);
+            case NOT_AVAILABLE -> new StatusCode(StatusCodes.Bad_LicenseNotAvailable);
+        });
         sink.accept(STATUS, status.text);
         sink.accept(LAST_ERROR, error);
         sink.accept(LISTENER_ENDPOINT, endpoint);
