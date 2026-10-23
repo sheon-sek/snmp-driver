@@ -13,4 +13,9 @@ public interface NotificationHandler {
      */
     default void onAuthenticationFailure(InetAddress source, int status) {
     }
+
+    /** As above; {@code toLocalEngine} when the message claimed the Gateway engine, i.e. was a v3 Inform. */
+    default void onAuthenticationFailure(InetAddress source, int status, boolean toLocalEngine) {
+        onAuthenticationFailure(source, status);
+    }
 }
