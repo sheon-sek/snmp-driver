@@ -115,6 +115,10 @@ class TrapV3InformTest {
 
     /** Discovers the Gateway engine and localizes the sender's user to it, as a real Inform sender does. */
     private byte[] discover() throws Exception {
+        return discover("informuser", AUTH);
+    }
+
+    private byte[] discover(String userName, String auth) throws Exception {
         SecurityProtocols protocols = new SecurityProtocols(SecurityProtocols.SecurityProtocolSet.none);
         protocols.addAuthenticationProtocol(new AuthHMAC192SHA256());
         protocols.addPrivacyProtocol(new PrivAES128());
@@ -126,17 +130,21 @@ class TrapV3InformTest {
         sender.listen();
         byte[] engine = sender.discoverAuthoritativeEngineID(gateway(), 2000);
         assertNotNull(engine, "no discovery report");
-        senderUsm.addUser(new UsmUser(new OctetString("informuser"), AuthHMAC192SHA256.ID, new OctetString(AUTH),
+        senderUsm.addUser(new UsmUser(new OctetString(userName), AuthHMAC192SHA256.ID, new OctetString(auth),
                 PrivAES128.ID, new OctetString(PRIV)), new OctetString(engine));
         return engine;
     }
 
     private ResponseEvent<Address> inform(int requestId) throws Exception {
+        return inform(requestId, "informuser", SecurityLevel.AUTH_PRIV);
+    }
+
+    private ResponseEvent<Address> inform(int requestId, String userName, int level) throws Exception {
         UserTarget<Address> target = new UserTarget<>();
         target.setAddress(gateway());
         target.setVersion(SnmpConstants.version3);
-        target.setSecurityLevel(SecurityLevel.AUTH_PRIV);
-        target.setSecurityName(new OctetString("informuser"));
+        target.setSecurityLevel(level);
+        target.setSecurityName(new OctetString(userName));
         target.setRetries(0);
         target.setTimeout(1500);
         ScopedPDU pdu = new ScopedPDU();
@@ -236,6 +244,44 @@ class TrapV3InformTest {
         // the sender-authoritative window of v3 Trap is separate: its own boots are still accepted
         TrapV3ReceiveTest.sendV3(port, SENDER, 3, "informuser", SecurityLevel.AUTH_PRIV, AUTH, PRIV);
         assertNotNull(sink.poll(5, TimeUnit.SECONDS), "notices=" + notices);
+    }
+
+    /** The sender keeps its (0, 0) view of the Gateway engine: no Report makes it resync. */
+    private void sendAsFirstTimeSync(byte[] engine) {
+        sender.setReportHandler(new Snmp.ReportHandler() {
+            @Override
+            public <A extends Address> void processReport(org.snmp4j.mp.PduHandle handle,
+                                                          org.snmp4j.CommandResponderEvent<A> event) {
+            }
+        });
+        senderUsm.getTimeTable().addEntry(new UsmTimeEntry(new OctetString(engine), 0, 0));
+    }
+
+    @Test
+    void wrongDigestDuringTimeSyncIsAnAuthenticationFailure() throws Exception {
+        listen(identity(), "");
+        sendAsFirstTimeSync(discover("informuser", "wrongpass99"));
+        assertFalse(acked(inform(1)));
+        assertTrue(waitFor(() -> counters.authFailure() == 1), "authFailure=" + counters.authFailure());
+        assertFalse(notices.isEmpty(), "LastError must be set");
+    }
+
+    @Test
+    void unknownUserDuringTimeSyncIsAnAuthenticationFailure() throws Exception {
+        listen(identity(), "");
+        sendAsFirstTimeSync(discover("nobody", AUTH));
+        assertFalse(acked(inform(1, "nobody", SecurityLevel.AUTH_PRIV)));
+        assertTrue(waitFor(() -> counters.authFailure() == 1), "authFailure=" + counters.authFailure());
+        assertFalse(notices.isEmpty(), "LastError must be set");
+    }
+
+    @Test
+    void unsupportedSecurityLevelDuringTimeSyncIsAnAuthenticationFailure() throws Exception {
+        listen(identity(), "");
+        sendAsFirstTimeSync(discover());
+        assertFalse(acked(inform(1, "informuser", SecurityLevel.NOAUTH_NOPRIV)));
+        assertTrue(waitFor(() -> counters.authFailure() == 1), "authFailure=" + counters.authFailure());
+        assertFalse(notices.isEmpty(), "LastError must be set");
     }
 
     private static boolean waitFor(java.util.function.BooleanSupplier condition) throws InterruptedException {
