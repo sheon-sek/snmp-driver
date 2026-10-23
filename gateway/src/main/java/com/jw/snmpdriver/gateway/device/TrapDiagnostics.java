@@ -146,6 +146,8 @@ public final class TrapDiagnostics {
     private String lastNotice;
     /** Gateway-wide engine identity hint (clone, corrupt file, write failure); appended to every LastError. */
     private String identityNotice = "";
+    /** Standing configuration limit (e.g. no v3 Trap without a sender engineID); hidden while Disabled. */
+    private String configNotice = "";
     private String engineIdHex = "";
     private NodeWriter writer;
 
@@ -314,6 +316,11 @@ public final class TrapDiagnostics {
         sink.accept(LOCAL_ENGINE_ID, engineIdHex);
     }
 
+    /** Set before {@link #track}; it accompanies every non-Disabled status until replaced. */
+    public synchronized void showConfigNotice(String notice) {
+        configNotice = notice == null ? "" : notice;
+    }
+
     public synchronized void showDisabled() {
         handle = null;
         publish(Status.DISABLED, "", "");
@@ -322,12 +329,6 @@ public final class TrapDiagnostics {
     public synchronized void showUnavailable(String reason) {
         handle = null;
         publish(Status.DEGRADED, reason + " " + REMEDIATION, "");
-    }
-
-    /** Trap security this version cannot receive with; no listener is acquired. */
-    public synchronized void showUnsupported(String reason) {
-        handle = null;
-        publish(Status.DEGRADED, reason, "");
     }
 
     /** Follows this handle; later registry changes arrive through {@link #refresh()}. */
@@ -389,9 +390,12 @@ public final class TrapDiagnostics {
             case NOT_AVAILABLE -> new StatusCode(StatusCodes.Bad_LicenseNotAvailable);
         });
         sink.accept(STATUS, status.text);
-        sink.accept(LAST_ERROR, identityNotice.isEmpty() ? error
-                : error.isEmpty() ? identityNotice : error + " " + identityNotice);
+        sink.accept(LAST_ERROR, join(join(error, status == Status.DISABLED ? "" : configNotice), identityNotice));
         sink.accept(LISTENER_ENDPOINT, endpoint);
+    }
+
+    private static String join(String first, String second) {
+        return first.isEmpty() ? second : second.isEmpty() ? first : first + " " + second;
     }
 
     private static final class NodeWriter {
