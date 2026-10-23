@@ -271,7 +271,7 @@ public final class LicenseVerifierService {
             String key = entry.getKey();
             List<String> licenseInfo = entry.getValue();
             List<String> currentInfo = normalizedCurrentMachineInfo.getOrDefault(key, List.of());
-            String matchedInfo = firstMatchingInfo(licenseInfo, currentInfo);
+            String matchedInfo = MachineIdentifierMatcher.firstMatch(licenseInfo, currentInfo);
 
             IdentifierMatchModel detail = new IdentifierMatchModel();
             detail.key = key;
@@ -287,7 +287,7 @@ public final class LicenseVerifierService {
         }
 
         status.matchedIdentifiers = matched;
-        status.requiredMatchedIdentifiers = requiredMatches(status.licenseIdentifierCount, config.minimumMatchRatio);
+        status.requiredMatchedIdentifiers = MachineIdentifierMatcher.requiredMatches(status.licenseIdentifierCount, config.minimumMatchRatio);
         status.matchRatio = status.licenseIdentifierCount == 0
             ? 0.0d
             : matched / (double) status.licenseIdentifierCount;
@@ -303,63 +303,15 @@ public final class LicenseVerifierService {
     }
 
     private Map<String, List<String>> normalizedHashModel(MachineInfoModel hashes) {
-        Map<String, List<String>> normalized = new LinkedHashMap<>();
-        if (hashes == null) {
-            return normalized;
-        }
-        addHash(normalized, MachineInfoService.MACHINE_GUID, hashes.machineGuid);
-        addHash(normalized, MachineInfoService.SYSTEM_UUID, hashes.systemUuid);
-        addHash(normalized, MachineInfoService.BIOS_SERIAL_NUMBER, hashes.biosSerialNumber);
-        addHash(normalized, MachineInfoService.MOTHERBOARD_SERIAL_NUMBER, hashes.motherboardSerialNumber);
-        addHash(normalized, MachineInfoService.DISK_SERIAL_NUMBER, hashes.diskSerialNumber);
-        addHash(normalized, MachineInfoService.CPU_PROCESSOR_ID, hashes.cpuProcessorId);
-        addHashes(normalized, MachineInfoService.MAC_ADDRESS, hashes.macAddress);
-        return normalized;
-    }
-
-    private void addHash(Map<String, List<String>> hashes, String key, String value) {
-        String hash = normalizeHash(value);
-        if (!hash.isBlank()) {
-            hashes.put(key, List.of(hash));
-        }
-    }
-
-    private void addHashes(Map<String, List<String>> hashes, String key, List<String> values) {
-        List<String> normalized = new ArrayList<>();
-        if (values != null) {
-            for (String value : values) {
-                String hash = normalizeHash(value);
-                if (!hash.isBlank() && !normalized.contains(hash)) {
-                    normalized.add(hash);
-                }
-            }
-        }
-        if (!normalized.isEmpty()) {
-            hashes.put(key, normalized);
-        }
+        return MachineIdentifierMatcher.hashesByKey(hashes);
     }
 
     private int countMachineInfoIdentifiers(MachineInfoModel machineInfo) {
         return normalizedHashModel(machineInfo).size();
     }
 
-    private String firstMatchingInfo(List<String> licensedInfos, List<String> currentInfo) {
-        for (String licensedInfo : licensedInfos) {
-            if (currentInfo.contains(licensedInfo)) {
-                return licensedInfo;
-            }
-        }
-        return "";
-    }
-
     private String joinInfo(List<String> info) {
         return info == null || info.isEmpty() ? "" : String.join(", ", info);
-    }
-
-    // mathematical function to calculate minimum number of identifier required
-    private int requiredMatches(int identifierCount, double minimumMatchRatio) {
-        double ratio = Math.max(0.0d, Math.min(1.0d, minimumMatchRatio));
-        return Math.max(1, (int) Math.floor(identifierCount * ratio) + 1);
     }
 
     private LicenseStatusModel baseStatus(Clock clock) {
@@ -421,10 +373,6 @@ public final class LicenseVerifierService {
         if (config.minimumLicenseIdentifiers < 1) {
             config.minimumLicenseIdentifiers = 1;
         }
-    }
-
-    private String normalizeHash(String value) {
-        return trim(value).toLowerCase(Locale.ROOT);
     }
 
     private String trim(String value) {

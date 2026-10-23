@@ -29,6 +29,18 @@ class TrapListenerRegistryTest {
     }
 
     @Test
+    void registryExposesTheEngineIdentityItWasCreatedWith() {
+        TrapEngineIdentity identity = TrapEngineIdentity.unpersisted(new byte[] {(byte) 0x80, 1}, "不可写");
+        TrapListenerRegistry registry = new TrapListenerRegistry((address, port) -> () -> { }, scheduler,
+                () -> com.jw.snmpdriver.snmp.runtime.LicenseGate.Verdict.LICENSED, identity);
+
+        assertEquals(identity, registry.engineIdentity().orElseThrow());
+        assertFalse(identity.informAvailable());
+        assertTrue(new TrapListenerRegistry((address, port) -> () -> { }, scheduler).engineIdentity().isEmpty());
+        registry.closeAll();
+    }
+
+    @Test
     void firstAcquireBindsAndLastReleaseFreesPort() throws Exception {
         int port = freePort();
         TrapListenerRegistry registry = new TrapListenerRegistry(new Snmp4jListenerBinder(), scheduler);

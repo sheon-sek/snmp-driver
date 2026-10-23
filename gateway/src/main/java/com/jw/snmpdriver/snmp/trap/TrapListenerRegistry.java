@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -32,6 +33,8 @@ public final class TrapListenerRegistry {
     private final ScheduledExecutorService scheduler;
     private final Supplier<LicenseGate.Verdict> license;
     private final boolean watchLicense;
+    /** Loaded (boots+1, written) before this registry exists, so no listener binds before the identity is saved. */
+    private final TrapEngineIdentity engineIdentity;
     private final Map<Integer, Listener> listeners = new HashMap<>();
     private LicenseGate.Verdict lastVerdict;
     private ScheduledFuture<?> licenseWatch;
@@ -40,21 +43,34 @@ public final class TrapListenerRegistry {
 
     /** Treats every Notification as licensed and never polls the License; for tests and bind-only use. */
     public TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler) {
-        this(binder, scheduler, () -> LicenseGate.Verdict.LICENSED, false);
+        this(binder, scheduler, () -> LicenseGate.Verdict.LICENSED, false, null);
     }
 
     /** {@code license} is polled every {@value #LICENSE_WATCH_SECONDS} s so Traps/Status follows License changes. */
     public TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler,
                                 Supplier<LicenseGate.Verdict> license) {
-        this(binder, scheduler, license, true);
+        this(binder, scheduler, license, true, null);
+    }
+
+    /** {@code engineIdentity} is the Gateway-wide local engine identity, already persisted by the caller. */
+    public TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler,
+                                Supplier<LicenseGate.Verdict> license, TrapEngineIdentity engineIdentity) {
+        this(binder, scheduler, license, true, Objects.requireNonNull(engineIdentity));
     }
 
     private TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler,
-                                 Supplier<LicenseGate.Verdict> license, boolean watchLicense) {
+                                 Supplier<LicenseGate.Verdict> license, boolean watchLicense,
+                                 TrapEngineIdentity engineIdentity) {
         this.binder = Objects.requireNonNull(binder);
         this.scheduler = Objects.requireNonNull(scheduler);
         this.license = Objects.requireNonNull(license);
         this.watchLicense = watchLicense;
+        this.engineIdentity = engineIdentity;
+    }
+
+    /** Empty only for registries built without an identity (tests, bind-only use). */
+    public Optional<TrapEngineIdentity> engineIdentity() {
+        return Optional.ofNullable(engineIdentity);
     }
 
     /** Startup guard: a failing factory yields null instead of failing the caller. */

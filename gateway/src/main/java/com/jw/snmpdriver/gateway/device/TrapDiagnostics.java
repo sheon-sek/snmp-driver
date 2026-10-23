@@ -43,6 +43,7 @@ public final class TrapDiagnostics {
     static final String STATUS = "Status";
     static final String LAST_ERROR = "LastError";
     static final String LISTENER_ENDPOINT = "ListenerEndpoint";
+    static final String LOCAL_ENGINE_ID = "LocalEngineId";
     static final String OVERFLOW_COUNT = "OverflowCount";
     static final String LAST_FOLDER = "Last";
     static final String LAST_SEQUENCE = "Last/Sequence";
@@ -90,6 +91,7 @@ public final class TrapDiagnostics {
         NODES.put(STATUS, NodeType.STRING);
         NODES.put(LAST_ERROR, NodeType.STRING);
         NODES.put(LISTENER_ENDPOINT, NodeType.STRING);
+        NODES.put(LOCAL_ENGINE_ID, NodeType.STRING);
         for (String name : new String[] {"ReceivedCount", "AcceptedCount", "DroppedRateLimitCount",
                 "DroppedQueueFullCount", "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount",
                 "ListenerUnmatchedCount", "ListenerMultiMatchCount"}) {
@@ -142,6 +144,9 @@ public final class TrapDiagnostics {
     private TrapListenerHandle handle;
     private boolean nodesCreated;
     private String lastNotice;
+    /** Gateway-wide engine identity hint (clone, corrupt file, write failure); appended to every LastError. */
+    private String identityNotice = "";
+    private String engineIdHex = "";
     private NodeWriter writer;
 
     TrapDiagnostics(BiConsumer<String, Object> sink) {
@@ -298,7 +303,15 @@ public final class TrapDiagnostics {
         }
         writer.createUnder(root);
         nodesCreated = true;
+        sink.accept(LOCAL_ENGINE_ID, engineIdHex);
         showDisabled();
+    }
+
+    /** Gateway-wide local engineID (hex) and its operator notice, if any; shown on every Device. */
+    public synchronized void showEngineIdentity(String engineIdHex, String notice) {
+        this.engineIdHex = engineIdHex;
+        identityNotice = notice == null ? "" : notice;
+        sink.accept(LOCAL_ENGINE_ID, engineIdHex);
     }
 
     public synchronized void showDisabled() {
@@ -376,7 +389,8 @@ public final class TrapDiagnostics {
             case NOT_AVAILABLE -> new StatusCode(StatusCodes.Bad_LicenseNotAvailable);
         });
         sink.accept(STATUS, status.text);
-        sink.accept(LAST_ERROR, error);
+        sink.accept(LAST_ERROR, identityNotice.isEmpty() ? error
+                : error.isEmpty() ? identityNotice : error + " " + identityNotice);
         sink.accept(LISTENER_ENDPOINT, endpoint);
     }
 

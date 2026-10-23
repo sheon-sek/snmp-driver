@@ -81,6 +81,11 @@ final class SNMPDeviceFixture implements AutoCloseable {
         return node.getValue();
     }
 
+    java.nio.file.Path engineIdentityFile() {
+        return bundle.context().getSystemManager().getModuleConfigLocalDir("com.jw.snmpdriver")
+                .resolve(com.jw.snmpdriver.snmp.trap.TrapEngineIdentity.FILE_NAME);
+    }
+
     Object value(String trapsPath) {
         return read(trapsPath).getValue().getValue();
     }
