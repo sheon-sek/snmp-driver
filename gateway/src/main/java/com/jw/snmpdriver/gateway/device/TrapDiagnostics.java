@@ -3,12 +3,16 @@ package com.jw.snmpdriver.gateway.device;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import com.inductiveautomation.ignition.gateway.opcua.server.api.DeviceContext;
+import com.jw.snmpdriver.snmp.address.TrapItemPath;
 import com.jw.snmpdriver.snmp.runtime.LicenseGate;
 import com.jw.snmpdriver.snmp.trap.TrapCounters;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
@@ -39,6 +43,7 @@ public final class TrapDiagnostics {
     static final String STATUS = "Status";
     static final String LAST_ERROR = "LastError";
     static final String LISTENER_ENDPOINT = "ListenerEndpoint";
+    static final String OVERFLOW_COUNT = "OverflowCount";
     static final String LAST_FOLDER = "Last";
     static final String LAST_SEQUENCE = "Last/Sequence";
     static final String LAST_RECEIVED_TIME = "Last/ReceivedTime";
@@ -58,6 +63,10 @@ public final class TrapDiagnostics {
 
     private static final String REJECTED_NOTE = "处置建议：修正冲突设备的 Trap 配置或停用冲突设备后，"
             + "重新保存或重新启用本设备以再次申请监听（被拒绝的申请不会自动重试）。";
+
+    /** Shown as the Description of every {@code TRAP.*} node (ADR 0008). */
+    static final String TRAP_PATH_NOTE = "TRAP.* 是每个 trapOID 各自的独立计数器和最近一条，不是原子快照；"
+            + "需要一致读取请读设备级 Traps/Last/Json。只读，不触发 SNMP GET，在 Notification 到达时推送。";
 
     private static final String NODE_NOTE = "Last/* 为非原子镜像，需要一致读取时读 Last/Json；"
             + "计数器合并发布，每个节点至多每秒写一次。";
@@ -86,6 +95,7 @@ public final class TrapDiagnostics {
                 "ListenerUnmatchedCount", "ListenerMultiMatchCount"}) {
             NODES.put(name, NodeType.UINT64);
         }
+        NODES.put(OVERFLOW_COUNT, NodeType.UINT64);
         NODES.put(LAST_SEQUENCE, NodeType.UINT64);
         NODES.put(LAST_RECEIVED_TIME, NodeType.DATE_TIME);
         NODES.put(LAST_PDU_TYPE, NodeType.STRING);
@@ -126,7 +136,9 @@ public final class TrapDiagnostics {
     private final Map<String, LongSupplier> counterSources;
     private final Map<String, Long> publishedCounters = new HashMap<>();
     private final TrapState state = new TrapState();
-    private StatusCode lastQuality;
+    private final TrapOidStates oidStates = new TrapOidStates();
+    private final List<PathSubscription> pathSubscriptions = new CopyOnWriteArrayList<>();
+    private volatile StatusCode lastQuality;
     private TrapListenerHandle handle;
     private boolean nodesCreated;
     private String lastNotice;
@@ -162,6 +174,7 @@ public final class TrapDiagnostics {
         sources.put("DuplicateInformCount", counters::duplicateInform);
         sources.put("ListenerUnmatchedCount", () -> diagnostics.listenerCount(false));
         sources.put("ListenerMultiMatchCount", () -> diagnostics.listenerCount(true));
+        sources.put(OVERFLOW_COUNT, diagnostics.oidStates::overflowCount);
         diagnostics.writer = writer;
         return diagnostics;
     }
@@ -177,8 +190,61 @@ public final class TrapDiagnostics {
     /** Called on the listener worker for every accepted Notification. */
     public synchronized void accept(TrapNotification notification) {
         TrapState.Snapshot snapshot = state.record(notification);
+        TrapOidStates.Entry entry = oidStates.record(snapshot.trapOid(), snapshot.sequence(), snapshot.receivedAt(),
+                snapshot.varbindsJson());
         if (lastQuality == null) {
             publishLast(snapshot);
+            if (entry != null) {
+                for (PathSubscription subscription : pathSubscriptions) {
+                    if (subscription.path.trapOid().canonical().equals(snapshot.trapOid())) {
+                        subscription.push(valueOf(subscription.path.field(), entry));
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Current value of a {@code TRAP.*} path. Lock-free, so a reader never waits for the listener worker.
+     * An untracked OID reads Count=0 and empty fields with Good quality; License follows {@code Last/*}.
+     */
+    public DataValue readTrapPath(TrapItemPath path) {
+        StatusCode quality = lastQuality;
+        if (quality != null) {
+            return new DataValue(quality);
+        }
+        return valueOf(path.field(), oidStates.get(path.trapOid().canonical()));
+    }
+
+    /**
+     * Pushes the path's current value to {@code sink} now and again whenever its OID's Notification arrives or the
+     * License verdict changes; no polling. Reserves a slot for the OID. Close the returned handle to stop.
+     */
+    public synchronized Runnable subscribeTrapPath(TrapItemPath path, Consumer<DataValue> sink) {
+        oidStates.reserve(path.trapOid().canonical());
+        PathSubscription subscription = new PathSubscription(path, sink);
+        pathSubscriptions.add(subscription);
+        subscription.push(readTrapPath(path));
+        return () -> pathSubscriptions.remove(subscription);
+    }
+
+    private static DataValue valueOf(TrapItemPath.Field field, TrapOidStates.Entry entry) {
+        return new DataValue(switch (field) {
+            case COUNT -> new Variant(Unsigned.ulong(entry.count()));
+            case SEQUENCE -> new Variant(Unsigned.ulong(entry.sequence()));
+            case LAST_TIME -> new Variant(entry.lastTime() == null
+                    ? DateTime.NULL_VALUE : new DateTime(entry.lastTime()));
+            case LAST_VARBINDS -> new Variant(entry.lastVarbindsJson());
+        });
+    }
+
+    private record PathSubscription(TrapItemPath path, Consumer<DataValue> sink) {
+        void push(DataValue value) {
+            try {
+                sink.accept(value);
+            } catch (RuntimeException error) {
+                logger.warn("Failed to push SNMP TRAP path {}", path.canonical(), error);
+            }
         }
     }
 
@@ -221,6 +287,9 @@ public final class TrapDiagnostics {
         }
         lastQuality = quality;
         publishLast(state.last());
+        for (PathSubscription subscription : pathSubscriptions) {
+            subscription.push(readTrapPath(subscription.path));
+        }
     }
 
     public synchronized void createUnder(UaFolderNode root) {

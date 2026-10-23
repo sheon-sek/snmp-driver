@@ -8,6 +8,8 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.collect.ImmutableList;
@@ -18,12 +20,17 @@ import com.jw.snmpdriver.gateway.service.ServiceBundle;
 import com.jw.ignition.license.enums.LicenseStatusCode;
 import com.jw.ignition.license.model.LicenseStatusModel;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServer;
+import org.eclipse.milo.opcua.sdk.server.items.DataItem;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServerConfig;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaVariableNode;
+import org.eclipse.milo.opcua.stack.core.AttributeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
+import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.TimestampsToReturn;
+import org.eclipse.milo.opcua.stack.core.types.structured.ReadValueId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
 
 /**
@@ -37,6 +44,7 @@ final class SNMPDeviceFixture implements AutoCloseable {
     final int trapPort;
     final SNMPDevice device;
     private final ServiceBundle bundle = new ServiceBundle();
+    private final AtomicInteger nextItemId = new AtomicInteger();
 
     /** The Gateway is faked, so the Trap Community is resolved by the device's SecretResolver test seam. */
     SNMPDeviceFixture(boolean trapEnabled, String trapCommunity, boolean licensed) throws Exception {
@@ -70,6 +78,43 @@ final class SNMPDeviceFixture implements AutoCloseable {
 
     Object value(String trapsPath) {
         return read(trapsPath).getValue().getValue();
+    }
+
+    /** Reads an attribute of a dynamic Item Path such as {@code TRAP.Count/<oid>} the way the OPC UA server does. */
+    DataValue readPath(String itemPath, AttributeId attribute) {
+        ReadValueId id = new ReadValueId(new NodeId(NAMESPACE, "[probe]" + itemPath), attribute.uid(), null,
+                QualifiedName.NULL_VALUE);
+        return device.read(null, 0.0, TimestampsToReturn.Both, List.of(id)).get(0);
+    }
+
+    DataValue readPath(String itemPath) {
+        return readPath(itemPath, AttributeId.Value);
+    }
+
+    /** Creates a monitored item on a dynamic Item Path; every value pushed to it is appended to the result. */
+    List<DataValue> subscribePath(String itemPath, double samplingInterval) {
+        List<DataValue> published = new CopyOnWriteArrayList<>();
+        ReadValueId id = new ReadValueId(new NodeId(NAMESPACE, "[probe]" + itemPath), AttributeId.Value.uid(), null,
+                QualifiedName.NULL_VALUE);
+        UInteger itemId = Unsigned.uint(nextItemId.incrementAndGet());
+        DataItem item = (DataItem) Proxy.newProxyInstance(DataItem.class.getClassLoader(),
+                new Class<?>[] {DataItem.class}, (p, m, a) -> switch (m.getName()) {
+                    case "getId" -> itemId;
+                    case "getSubscriptionId" -> Unsigned.uint(1);
+                    case "getReadValueId" -> id;
+                    case "getSamplingInterval" -> samplingInterval;
+                    case "isSamplingEnabled" -> true;
+                    case "setValue" -> {
+                        published.add((DataValue) a[0]);
+                        yield null;
+                    }
+                    case "hashCode" -> System.identityHashCode(p);
+                    case "equals" -> p == a[0];
+                    case "toString" -> "DataItem#" + itemId;
+                    default -> throw new AssertionError("Unexpected DataItem call: " + m.getName());
+                });
+        device.onDataItemsCreated(List.of(item));
+        return published;
     }
 
     /** Swaps the cached License status that {@code ServiceBundle.licenseVerdict()} reads. */
