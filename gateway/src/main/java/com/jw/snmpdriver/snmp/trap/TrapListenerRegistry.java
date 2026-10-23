@@ -23,6 +23,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import com.jw.snmpdriver.snmp.runtime.LicenseGate;
@@ -40,6 +41,9 @@ public final class TrapListenerRegistry {
     private final boolean watchLicense;
     /** Loaded (boots+1, written) before this registry exists, so no listener binds before the identity is saved. */
     private final TrapEngineIdentity engineIdentity;
+    /** The local engine clock, started with the identity: every Listener's USM reads engineTime from it. */
+    private final LongSupplier nanos;
+    private final long engineStartNanos;
     private final Map<Integer, Listener> listeners = new HashMap<>();
     private LicenseGate.Verdict lastVerdict;
     private ScheduledFuture<?> licenseWatch;
@@ -60,12 +64,25 @@ public final class TrapListenerRegistry {
     /** {@code engineIdentity} is the Gateway-wide local engine identity, already persisted by the caller. */
     public TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler,
                                 Supplier<LicenseGate.Verdict> license, TrapEngineIdentity engineIdentity) {
-        this(binder, scheduler, license, true, Objects.requireNonNull(engineIdentity));
+        this(binder, scheduler, license, engineIdentity, System::nanoTime);
+    }
+
+    TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler,
+                         Supplier<LicenseGate.Verdict> license, TrapEngineIdentity engineIdentity, LongSupplier nanos) {
+        this(binder, scheduler, license, true, Objects.requireNonNull(engineIdentity), nanos);
     }
 
     private TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler,
                                  Supplier<LicenseGate.Verdict> license, boolean watchLicense,
                                  TrapEngineIdentity engineIdentity) {
+        this(binder, scheduler, license, watchLicense, engineIdentity, System::nanoTime);
+    }
+
+    private TrapListenerRegistry(ListenerBinder binder, ScheduledExecutorService scheduler,
+                                 Supplier<LicenseGate.Verdict> license, boolean watchLicense,
+                                 TrapEngineIdentity engineIdentity, LongSupplier nanos) {
+        this.nanos = Objects.requireNonNull(nanos);
+        this.engineStartNanos = nanos.getAsLong();
         this.binder = Objects.requireNonNull(binder);
         this.scheduler = Objects.requireNonNull(scheduler);
         this.license = Objects.requireNonNull(license);
@@ -372,7 +389,13 @@ public final class TrapListenerRegistry {
         if (engineIdentity == null) {
             return new TrapUsmStack(org.snmp4j.mp.MPv3.createLocalEngineID(), 1);
         }
-        return new TrapUsmStack(engineIdentity.engineId(), engineIdentity.engineBoots(), true);
+        return new TrapUsmStack(engineIdentity.engineId(), engineIdentity.engineBoots(), localEngineTime(), true);
+    }
+
+    /** Seconds since the identity's boots began; never goes back for a rebuilt Listener or another port. */
+    int localEngineTime() {
+        long seconds = (nanos.getAsLong() - engineStartNanos) / 1_000_000_000L;
+        return (int) Math.min(Math.max(seconds, 0), Integer.MAX_VALUE);
     }
 
     /** Traps/LastError for a v3 Inform the identity cannot back (ADR 0009), or null when it can. */

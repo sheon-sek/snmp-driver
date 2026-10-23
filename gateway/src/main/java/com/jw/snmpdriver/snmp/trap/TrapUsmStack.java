@@ -76,6 +76,14 @@ public final class TrapUsmStack {
     }
 
     public TrapUsmStack(byte[] localEngineId, int engineBoots, boolean informEnabled) {
+        this(localEngineId, engineBoots, 0, informEnabled);
+    }
+
+    /**
+     * {@code engineTime} is the local engine's current time in seconds, from the registry-wide clock: a new USM
+     * would otherwise restart it at 0 and move the same authoritative engine back in time.
+     */
+    public TrapUsmStack(byte[] localEngineId, int engineBoots, int engineTime, boolean informEnabled) {
         localEngine = new OctetString(localEngineId);
         this.informEnabled = informEnabled;
         protocols = new SecurityProtocols(SecurityProtocols.SecurityProtocolSet.none);
@@ -106,13 +114,14 @@ public final class TrapUsmStack {
                 if (status == SnmpConstants.SNMPv3_USM_OK) {
                     incomingEngine.set(securityEngineID.getValue());
                 } else {
-                    rejection.set(classify(securityEngineID, (UsmSecurityParameters) parameters));
+                    rejection.set(classify(status, securityLevel, securityEngineID, (UsmSecurityParameters) parameters));
                 }
                 return status;
             }
         };
         // discovery stays off: only the local engine (below) and registered sender engines pass checkEngineID
         usm.setEngineDiscoveryEnabled(false);
+        usm.getTimeTable().setLocalTime(new UsmTimeEntry(localEngine, engineBoots, engineTime));
         if (informEnabled) {
             // the time is checked against the local clock (authoritative branch), this entry only admits the id
             usm.getTimeTable().addEntry(new UsmTimeEntry(localEngine, engineBoots, 0));
@@ -136,18 +145,24 @@ public final class TrapUsmStack {
     }
 
     /**
-     * An empty engineID is a discovery probe; boots and time 0 toward the local engine is the sender's first
-     * time sync. Both get a Report with the local values and are not failures.
+     * Only two rejections are not failures, both answered by a Report with the local values: a discovery probe
+     * (empty engineID, no user, noAuthNoPriv) and the sender's first time sync toward the local engine (boots
+     * and time 0, rejected by the time window, i.e. after its digest verified). A wrong digest, unknown user or
+     * unsupported security level is always an authentication failure, whatever engineID or time it claims.
      */
-    private Rejection classify(OctetString engine, UsmSecurityParameters parameters) {
+    private Rejection classify(int status, int securityLevel, OctetString engine, UsmSecurityParameters parameters) {
         if (engine.length() == 0) {
-            return Rejection.DISCOVERY;
+            boolean probe = status == SnmpConstants.SNMPv3_USM_UNKNOWN_ENGINEID
+                    && securityLevel == org.snmp4j.security.SecurityLevel.NOAUTH_NOPRIV
+                    && (parameters.getUserName() == null || parameters.getUserName().length() == 0);
+            return probe ? Rejection.DISCOVERY : Rejection.OTHER;
         }
         if (!informEnabled || !localEngine.equals(engine)) {
             return Rejection.OTHER;
         }
         // at the boots limit no sync can succeed (RFC 3414 §2.2.2), so the sync itself is the refused Inform
-        boolean sync = parameters.getAuthoritativeEngineBoots() == 0 && parameters.getAuthoritativeEngineTime() == 0;
+        boolean sync = status == SnmpConstants.SNMPv3_USM_NOT_IN_TIME_WINDOW
+                && parameters.getAuthoritativeEngineBoots() == 0 && parameters.getAuthoritativeEngineTime() == 0;
         return sync && usm.getEngineBoots() != Integer.MAX_VALUE ? Rejection.DISCOVERY : Rejection.LOCAL_ENGINE;
     }
 

@@ -42,13 +42,20 @@ public final class TrapEngineIdentity {
     private static final DateTimeFormatter SUFFIX_TIME =
             DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC);
     private static final HexFormat HEX = HexFormat.of();
-    /** RFC 3414 §2.2.2: engineID length 5..32 octets. Tests use shorter ids, so only the upper bound is enforced. */
+    /** SnmpEngineID (RFC 3411): 5..32 octets; anything else in the file is recovered as corrupt. */
+    private static final int MIN_ENGINE_ID_LENGTH = 5;
     private static final int MAX_ENGINE_ID_LENGTH = 32;
 
     /** Writes {@code content} to {@code target} durably; the default is temp file + fsync + ATOMIC_MOVE. */
     @FunctionalInterface
     public interface FileWriter {
         void write(Path target, byte[] content) throws IOException;
+    }
+
+    /** Flushes a directory's entries to disk; throws UnsupportedOperationException where the platform cannot. */
+    @FunctionalInterface
+    public interface DirectorySync {
+        void force(Path directory) throws IOException;
     }
 
     private final byte[] engineId;
@@ -164,8 +171,12 @@ public final class TrapEngineIdentity {
         }
     }
 
-    /** Temp file in the same directory, fsync, then ATOMIC_MOVE over the target. Creates the directory. */
+    /** Temp file in the same directory, fsync, ATOMIC_MOVE over the target, then fsync the directory. */
     public static void writeAtomically(Path target, byte[] content) throws IOException {
+        writeAtomically(target, content, TrapEngineIdentity::forceDirectory);
+    }
+
+    static void writeAtomically(Path target, byte[] content, DirectorySync directorySync) throws IOException {
         Path directory = target.toAbsolutePath().getParent();
         Files.createDirectories(directory);
         Path temp = Files.createTempFile(directory, target.getFileName().toString(), ".tmp");
@@ -181,6 +192,22 @@ public final class TrapEngineIdentity {
             Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally {
             Files.deleteIfExists(temp);
+        }
+        // the rename is durable only once the directory entry is; an I/O error here is a write failure
+        try {
+            directorySync.force(directory);
+        } catch (UnsupportedOperationException unsupported) {
+            logger.debug("Directory fsync is not supported for {}; relying on ATOMIC_MOVE alone", directory);
+        }
+    }
+
+    /** Linux and macOS can fsync a directory; Windows cannot open one as a channel. */
+    private static void forceDirectory(Path directory) throws IOException {
+        if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")) {
+            throw new UnsupportedOperationException("directory fsync on Windows");
+        }
+        try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
+            channel.force(true);
         }
     }
 
@@ -203,7 +230,7 @@ public final class TrapEngineIdentity {
         } catch (IllegalArgumentException error) {
             throw new CorruptException("engineId 不是十六进制");
         }
-        if (engineId.length == 0 || engineId.length > MAX_ENGINE_ID_LENGTH) {
+        if (engineId.length < MIN_ENGINE_ID_LENGTH || engineId.length > MAX_ENGINE_ID_LENGTH) {
             throw new CorruptException("engineId 长度无效");
         }
         int boots;

@@ -50,7 +50,7 @@ class TrapEngineIdentityTest {
 
     private TrapEngineIdentity load(Map<String, List<String>> machine, TrapEngineIdentity.FileWriter writer) {
         return TrapEngineIdentity.load(file(), () -> machine,
-                () -> new byte[] {(byte) 0x80, 0, 0x1F, (byte) generated.incrementAndGet()}, clock, writer);
+                () -> new byte[] {(byte) 0x80, 0, 0x1F, (byte) 0x88, (byte) generated.incrementAndGet()}, clock, writer);
     }
 
     private Properties stored() throws IOException {
@@ -69,13 +69,13 @@ class TrapEngineIdentityTest {
     void firstStartGeneratesEngineIdWithBootsOne() throws IOException {
         TrapEngineIdentity identity = load(MACHINE);
 
-        assertArrayEquals(new byte[] {(byte) 0x80, 0, 0x1F, 1}, identity.engineId());
-        assertEquals("80001f01", identity.engineIdHex());
+        assertArrayEquals(new byte[] {(byte) 0x80, 0, 0x1F, (byte) 0x88, 1}, identity.engineId());
+        assertEquals("80001f8801", identity.engineIdHex());
         assertEquals(1, identity.engineBoots());
         assertTrue(identity.informAvailable());
         assertNull(identity.notice());
         Properties stored = stored();
-        assertEquals("80001f01", stored.getProperty("engineId"));
+        assertEquals("80001f8801", stored.getProperty("engineId"));
         assertEquals("1", stored.getProperty("engineBoots"));
         assertTrue(stored.getProperty("machineFingerprint").contains("macAddress=sha256:m2"));
     }
@@ -85,7 +85,7 @@ class TrapEngineIdentityTest {
         load(MACHINE);
         TrapEngineIdentity identity = load(MACHINE);
 
-        assertEquals("80001f01", identity.engineIdHex());
+        assertEquals("80001f8801", identity.engineIdHex());
         assertEquals(2, identity.engineBoots());
         assertEquals("2", stored().getProperty("engineBoots"));
         assertEquals(List.of("trap-engine.properties"), siblings());
@@ -99,7 +99,7 @@ class TrapEngineIdentityTest {
                 "diskSerialNumber", List.of("sha256:d9"),
                 "macAddress", List.of("sha256:m2")));
 
-        assertEquals("80001f01", identity.engineIdHex());
+        assertEquals("80001f8801", identity.engineIdHex());
         assertEquals(2, identity.engineBoots());
     }
 
@@ -109,7 +109,7 @@ class TrapEngineIdentityTest {
         load(MACHINE);
         TrapEngineIdentity identity = load(OTHER_MACHINE);
 
-        assertEquals("80001f02", identity.engineIdHex());
+        assertEquals("80001f8802", identity.engineIdHex());
         assertEquals(1, identity.engineBoots());
         assertTrue(identity.informAvailable());
         assertTrue(identity.notice().contains("克隆"), identity.notice());
@@ -128,10 +128,23 @@ class TrapEngineIdentityTest {
         String fingerprint = stored().getProperty("machineFingerprint");
         TrapEngineIdentity identity = load(Map.of());
 
-        assertEquals("80001f01", identity.engineIdHex());
+        assertEquals("80001f8801", identity.engineIdHex());
         assertEquals(2, identity.engineBoots());
         assertNull(identity.notice());
         assertEquals(fingerprint, stored().getProperty("machineFingerprint"));
+    }
+
+    @Test
+    void engineIdOutsideFiveToThirtyTwoOctetsIsRecoveredAsCorrupt() throws IOException {
+        Files.createDirectories(file().getParent());
+        Files.writeString(file(), "engineId=80001f07\nengineBoots=5\nmachineFingerprint=\n");
+        TrapEngineIdentity identity = load(MACHINE);
+        assertEquals("80001f8801", identity.engineIdHex());
+        assertEquals(1, identity.engineBoots());
+        assertTrue(siblings().contains("trap-engine.properties.corrupt-20261023T010203Z"), siblings().toString());
+
+        Files.writeString(file(), "engineId=" + "ab".repeat(33) + "\nengineBoots=5\nmachineFingerprint=\n");
+        assertEquals("80001f8802", load(MACHINE).engineIdHex());
     }
 
     @Test
@@ -141,7 +154,7 @@ class TrapEngineIdentityTest {
 
         TrapEngineIdentity identity = load(MACHINE);
 
-        assertEquals("80001f01", identity.engineIdHex());
+        assertEquals("80001f8801", identity.engineIdHex());
         assertEquals(1, identity.engineBoots());
         assertTrue(identity.informAvailable());
         assertTrue(identity.notice().contains("损坏"), identity.notice());
@@ -150,12 +163,44 @@ class TrapEngineIdentityTest {
     }
 
     @Test
+    void parentDirectoryIsSyncedAfterTheMoveLandsTheFile() {
+        List<Path> synced = new java.util.ArrayList<>();
+        TrapEngineIdentity identity = load(MACHINE, (target, content) -> TrapEngineIdentity.writeAtomically(
+                target, content, directory -> {
+                    assertTrue(Files.exists(target), "fsync 目录须在 ATOMIC_MOVE 之后");
+                    synced.add(directory);
+                }));
+        assertTrue(identity.informAvailable());
+        assertEquals(List.of(file().getParent().toAbsolutePath()), synced);
+    }
+
+    @Test
+    void directorySyncIoFailureIsAWriteFailure() {
+        TrapEngineIdentity identity = load(MACHINE, (target, content) -> TrapEngineIdentity.writeAtomically(
+                target, content, directory -> {
+                    throw new IOException("EIO");
+                }));
+        assertFalse(identity.informAvailable());
+        assertTrue(identity.notice().contains("EIO"), identity.notice());
+    }
+
+    @Test
+    void directorySyncUnsupportedByThePlatformCountsAsSuccess() {
+        TrapEngineIdentity identity = load(MACHINE, (target, content) -> TrapEngineIdentity.writeAtomically(
+                target, content, directory -> {
+                    throw new UnsupportedOperationException("no directory fsync");
+                }));
+        assertTrue(identity.informAvailable());
+        assertNull(identity.notice());
+    }
+
+    @Test
     void writeFailureDisablesInformButKeepsAnIdentity() {
         TrapEngineIdentity identity = load(MACHINE, (target, content) -> {
             throw new IOException("disk full");
         });
 
-        assertEquals("80001f01", identity.engineIdHex());
+        assertEquals("80001f8801", identity.engineIdHex());
         assertFalse(identity.informAvailable());
         assertTrue(identity.notice().contains("disk full"), identity.notice());
         assertFalse(Files.exists(file()));
@@ -164,7 +209,7 @@ class TrapEngineIdentityTest {
     @Test
     void bootsReachingTheMaximumDisablesInform() throws IOException {
         Files.createDirectories(file().getParent());
-        Files.writeString(file(), "engineId=80001f07\nengineBoots=2147483646\nmachineFingerprint=\n");
+        Files.writeString(file(), "engineId=80001f8807\nengineBoots=2147483646\nmachineFingerprint=\n");
 
         TrapEngineIdentity reached = load(MACHINE);
         assertEquals(Integer.MAX_VALUE, reached.engineBoots());
@@ -172,7 +217,7 @@ class TrapEngineIdentityTest {
         assertTrue(reached.notice().contains("2147483647"), reached.notice());
 
         TrapEngineIdentity stays = load(MACHINE);
-        assertEquals("80001f07", stays.engineIdHex());
+        assertEquals("80001f8807", stays.engineIdHex());
         assertEquals(Integer.MAX_VALUE, stays.engineBoots());
         assertFalse(stays.informAvailable());
     }
@@ -180,11 +225,11 @@ class TrapEngineIdentityTest {
     @Test
     void missingFingerprintInFileIsNotTreatedAsClone() throws IOException {
         Files.createDirectories(file().getParent());
-        Files.writeString(file(), "engineId=80001f07\nengineBoots=5\n");
+        Files.writeString(file(), "engineId=80001f8807\nengineBoots=5\n");
 
         TrapEngineIdentity identity = load(MACHINE);
 
-        assertEquals("80001f07", identity.engineIdHex());
+        assertEquals("80001f8807", identity.engineIdHex());
         assertEquals(6, identity.engineBoots());
         assertNotEquals("", stored().getProperty("machineFingerprint"));
     }

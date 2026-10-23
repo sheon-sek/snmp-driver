@@ -41,6 +41,32 @@ class TrapListenerRegistryTest {
     }
 
     @Test
+    void listenersShareOneMonotonicLocalEngineClock() {
+        long[] now = {5_000_000_000L};
+        byte[] engineId = {(byte) 0x80, 0, 0x1F, (byte) 0x88, 4};
+        TrapEngineIdentity identity = TrapEngineIdentity.unpersisted(engineId, null);
+        TrapListenerRegistry registry = new TrapListenerRegistry(new FakeBinder(), scheduler,
+                () -> com.jw.snmpdriver.snmp.runtime.LicenseGate.Verdict.LICENSED, identity, () -> now[0]);
+
+        TrapListenerHandle first = registry.acquire("dev-a", "0.0.0.0", 10162);
+        now[0] += 200_000_000_000L;
+        first.release();
+        registry.acquire("dev-a", "0.0.0.0", 10162);
+        registry.acquire("dev-b", "0.0.0.0", 10163);
+
+        org.snmp4j.security.UsmTimeTable rebuilt = registry.usmStackOf(10162).usm().getTimeTable();
+        org.snmp4j.security.UsmTimeTable otherPort = registry.usmStackOf(10163).usm().getTimeTable();
+        assertTrue(rebuilt.getEngineTime() >= 200, "重建的 listener 不得让本地 engineTime 回退");
+        assertTrue(Math.abs(rebuilt.getEngineTime() - otherPort.getEngineTime()) <= 1, "跨端口同一本地时钟");
+        org.snmp4j.smi.OctetString local = new org.snmp4j.smi.OctetString(engineId);
+        for (org.snmp4j.security.UsmTimeTable table : List.of(rebuilt, otherPort)) {
+            assertEquals(org.snmp4j.mp.SnmpConstants.SNMPv3_USM_OK,
+                    table.checkTime(new org.snmp4j.security.UsmTimeEntry(local, 1, 200)), "200s 处于时间窗内");
+        }
+        registry.closeAll();
+    }
+
+    @Test
     void firstAcquireBindsAndLastReleaseFreesPort() throws Exception {
         int port = freePort();
         TrapListenerRegistry registry = new TrapListenerRegistry(new Snmp4jListenerBinder(), scheduler);
