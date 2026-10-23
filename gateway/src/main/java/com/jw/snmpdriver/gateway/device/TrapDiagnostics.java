@@ -352,6 +352,10 @@ public final class TrapDiagnostics {
             return;
         }
         String endpoint = current.endpoint() == null ? "" : current.endpoint();
+        if (current.conflict() != null) {
+            publish(Status.DEGRADED, current.conflict(), endpoint);
+            return;
+        }
         switch (current.state()) {
             case BOUND -> {
                 // Degraded outranks Unlicensed: without a bound port there is nothing to license
@@ -373,7 +377,8 @@ public final class TrapDiagnostics {
      * Listening and only when the text changes, so a flood of bad packets writes the node once.
      */
     public synchronized void notice(String message) {
-        if (handle == null || handle.isRejected() || handle.state() != TrapListenerState.BOUND
+        if (handle == null || handle.isRejected() || handle.conflict() != null
+                || handle.state() != TrapListenerState.BOUND
                 || message.equals(lastNotice)) {
             return;
         }

@@ -107,7 +107,7 @@ public final class TrapUsmStack {
 
     /**
      * Localizes the user to its sender engineID and lets that engine past the time table. Devices sharing the
-     * same securityName and engine share the entry; the first registration's keys win (conflicts are #37).
+     * same securityName and engine share the entry; mismatched same-name users never get here (#37).
      */
     public synchronized void register(TrapV3User user) {
         if (!user.receivesTraps()) {
