@@ -29,4 +29,4 @@
 
 ## 全量回归
 
-：49/49 通过（results-20261026T171610.json，Ignition 8.3.10，dev 构建未变）。首轮 48/49： 的 glob 选中了 igdev 0.3.1 遗留的同名空目录 （环境问题，与本票无关）；用例已改为只取文件，重跑全过。 通过。
+`python3 system-test/st.py run`：49/49 通过（results-20261026T171610.json，Ignition 8.3.10，dev 构建未变）。首轮 48/49：`module:reinstall` 的 glob 选中了 igdev 0.3.1 遗留的同名空目录 `*.modl`（环境问题，与本票无关）；用例已改为只取文件，重跑全过。`:base:test :gateway:test` 通过。
