@@ -59,13 +59,25 @@ final class SNMPDeviceFixture implements AutoCloseable {
     /** {@code trapSenderEngineId} applies to USM: the v3 user "probe" (noAuthNoPriv) is localized to it. */
     SNMPDeviceFixture(boolean trapEnabled, String trapCommunity, boolean licensed,
                       SNMPDeviceConfig.TrapSecurity trapSecurity, String trapSenderEngineId) throws Exception {
+        this(trapEnabled, trapCommunity, licensed, trapSecurity, trapSenderEngineId, true);
+    }
+
+    /**
+     * {@code servicesStarted=false} is a Gateway start: this Device is the first one, so its own startup starts
+     * the shared services (and creates the Trap registry) after building its address space.
+     */
+    SNMPDeviceFixture(boolean trapEnabled, String trapCommunity, boolean licensed,
+                      SNMPDeviceConfig.TrapSecurity trapSecurity, String trapSenderEngineId, boolean servicesStarted)
+            throws Exception {
         trapPort = freeUdpPort();
         GatewayContext gateway = gatewayContext();
         var setup = ServiceBundle.class.getDeclaredMethod("setupProcess", GatewayContext.class);
         setup.setAccessible(true);
         setup.invoke(bundle, gateway);
-        bundle.ensureStarted();
-        license(licensed);
+        if (servicesStarted) {
+            bundle.ensureStarted();
+            license(licensed);
+        }
 
         OpcUaServer server = new OpcUaServer(OpcUaServerConfig.builder().build(), null);
         // V3 + NO_AUTH_NO_PRIV keeps the polling side free of Secrets
@@ -77,6 +89,9 @@ final class SNMPDeviceFixture implements AutoCloseable {
                 trapSecurity, null, trapSenderEngineId, true, "", 1000);
         device = new SNMPDevice(deviceContext(server, gateway), config, bundle, secret -> trapCommunity);
         device.startup();
+        if (!servicesStarted) {
+            license(licensed);
+        }
     }
 
     /** Current value of a node under {@code [Device]/Traps/}, e.g. {@code "Last/Json"}. */

@@ -89,6 +89,18 @@ class SNMPDeviceTrapNodesTest {
         assertTrue(((String) fixture.value("LocalEngineId")).matches("[0-9a-f]{10,64}"));
     }
 
+    /** #41: after a Gateway restart the first Device built its nodes before the Trap registry existed. */
+    @Test
+    void firstDeviceAfterGatewayStartShowsTheLocalEngineId() throws Exception {
+        fixture = new SNMPDeviceFixture(true, "public", true, SNMPDeviceConfig.TrapSecurity.COMMUNITY, "", false);
+
+        java.util.Properties stored = new java.util.Properties();
+        try (var reader = java.nio.file.Files.newBufferedReader(fixture.engineIdentityFile())) {
+            stored.load(reader);
+        }
+        assertEquals(stored.getProperty("engineId"), fixture.value("LocalEngineId"));
+    }
+
     @Test
     void localEngineIdExistsWithTrapDisabledAndMatchesTheIdentityFile() throws Exception {
         fixture = new SNMPDeviceFixture(false, "public", true);

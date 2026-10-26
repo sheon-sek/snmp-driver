@@ -291,6 +291,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         try {
             createAddressSpace();
             services.ensureStarted();
+            showTrapEngineIdentity();
             acquireTrapListener();
             pollHandle = createPollHandle();
             subscriptionBridge = new SubscriptionBridge(
@@ -396,9 +397,13 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                 Reference.Direction.INVERSE
         ));
         diagnostics.createUnder(root);
+        trapDiagnostics.createUnder(root);
+    }
+
+    /** After {@code ensureStarted}: the first Device of a Gateway start builds its nodes before the registry exists. */
+    private void showTrapEngineIdentity() {
         services.trapRegistry().flatMap(TrapListenerRegistry::engineIdentity).ifPresent(identity ->
                 trapDiagnostics.showEngineIdentity(identity.engineIdHex(), identity.notice()));
-        trapDiagnostics.createUnder(root);
     }
 
     /** Trap failures only degrade the Traps nodes; they never touch Device Status or polling. */
