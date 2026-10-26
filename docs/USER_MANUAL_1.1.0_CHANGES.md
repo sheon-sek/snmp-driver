@@ -92,7 +92,7 @@ $data/config/local/com.jw.snmpdriver/trap-engine.properties
 
 ## 6. Docker 下固定 hostname/MAC
 
-Docker 重建容器可能改变机器标识，模块会把它判定为换机并重新生成 engineID（见 §5）。手册建议在 Docker 部署中固定 hostname 与 MAC 地址，例如：
+容器内通常只能采集到 MAC 地址这一项机器标识（没有 DMI、磁盘序列号）。Docker 25 起，未指定 MAC 的容器**每次启动**（包括 `docker restart`，不只是重建）都会分配新的随机 MAC，模块随即判定为换机并重新生成 engineID（见 §5），v3 Inform 发送方需要重新配置，`engineBoots` 也不会递增（#41 实测：Docker 29.8.1）。因此 Docker 部署**必须**固定 MAC 地址，建议同时固定 hostname，例如：
 
 ```yaml
 services:
@@ -101,7 +101,7 @@ services:
     mac_address: "02:42:ac:11:00:02"
 ```
 
-或 `docker run --hostname ignition-gw --mac-address 02:42:ac:11:00:02 ...`。同时说明：这也有助于 Module License 的机器标识保持稳定。
+或 `docker run --hostname ignition-gw --mac-address 02:42:ac:11:00:02 ...`。固定后实测：Gateway 重启时 engineID 不变、`engineBoots` 每次加 1。Module License 使用同一组机器标识，不固定 MAC 时 License 同样会在每次容器启动后失配，所以这一步对 License 也是必需的。
 
 ## 7. 冗余 Gateway 不支持
 
@@ -154,9 +154,20 @@ table inet snmptrap {
 
 发布端口 `-p 162:10162/udp`（compose：`"162:10162/udp"`），模块配置 `Trap Port = 10162`，发送方发往宿主机 IP 的 162 端口。
 
-**源 IP 是否保留**：【待 #41 回填：`-p 162:10162/udp` 映射下实测的 `Traps/Last/Source` 结果、测试环境（Docker 版本、userland-proxy 设置、rootful/rootless），以及对 Device Host / `Trap Source Allowlist` 配置的建议】
+**源 IP 是否保留**（#41 实测，Docker 29.8.1 rootful，默认 userland-proxy，WSL2 内核；报告见 `docs/test-reports/1.1.0/M1D_41_SYSTEM_TEST.md`）：
 
-已知风险（待上述实测确认）：Docker userland-proxy 与 rootless 网络可能把源 IP 改写为网桥地址，导致 Notification 无法归属到 Device；allowlist 不能恢复原 IP。rootless 模式下宿主机 162 仍受低端口权限限制。
+| 发送方 | 目的地址 | Gateway 看到的 `Last/Source` |
+|---|---|---|
+| 另一 Docker 网络中的容器 172.17.0.2 | 宿主机网桥地址 172.17.0.1:162 | 172.18.0.1（Gateway 所在网络的网关） |
+| 宿主机本机 | 127.0.0.1:162 | 172.18.0.1 |
+
+两种路径的源 IP 都被改写为 Gateway 所在 Docker 网络的网关地址。Notification 按源 IP 归属 Device，源 IP 被改写后会计入 `ListenerUnmatchedCount`，或者被错误地归属到 Host 恰好是网关地址的 Device；`Trap Source Allowlist` 不能恢复原始 IP。来自局域网外部主机、经物理网卡进入的流量在 WSL2 的 NAT 环境中无法测试，Linux 主机上 iptables DNAT 通常保留源 IP，但必须现场确认。
+
+手册建议：
+
+1. Linux 上优先使用 `network_mode: host`，按 §9.1 让模块监听 10162 并用 nftables 重定向 UDP 162，源 IP 保持不变。
+2. 必须使用 `-p 162:10162/udp` 时，上线前从实际设备发一条测试 Trap，确认 `Traps/Last/Source`（或 `Last/Json.source`）是设备的真实 IP。如果显示的是网桥或网关地址，不要用 Device Host 去迁就这个地址，应改用 host 网络。
+3. rootless Docker 的网络（slirp4netns/pasta）同样可能改写源 IP，并且宿主机 162 端口仍受低端口权限限制，不推荐用于接收 Trap。
 
 ### 9.4 LastError 文案
 

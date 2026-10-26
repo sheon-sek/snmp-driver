@@ -15,3 +15,7 @@ v3 Inform 以 Gateway 为权威方，本地 engineID 与 engineBoots 存在 `$da
 考虑过的替代方案：不检测、手册要求克隆后手动删文件（容易遗漏，两台 Gateway 静默共用身份）；每次启动生成新 engineID（违背 RFC 3414，发送方每次重启都要重配）；用时间戳猜测备份回退并一次性大幅增加 boots（判不准）；回退时停用 v3 Inform 等待人工确认（静默失效）。
 
 后果：Docker 重建容器可能改变机器标识并触发重新生成 engineID，手册建议固定 hostname 与 MAC。误判的最坏结果是多生成一次 engineID，只影响 v3 Inform，v1/v2c/v3 Trap 不受影响。
+
+## 补记（2026-10-26，#41 实测）
+
+Docker 29.8.1 下，容器内只采集到 `macAddress` 一项标识，而未指定 MAC 的容器每次启动（含 `docker restart`）都会分配新的随机 MAC。所以问题不只出在“重建容器”，每次 Gateway 重启都会被判定为克隆。Docker 部署必须固定 MAC，手册变更清单 §6 已据此改为必需项。固定 MAC 后实测 engineID 保持不变，boots 逐次加 1。检测逻辑本身不变。

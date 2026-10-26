@@ -282,3 +282,6 @@ _references/
 
 # igdev: disposable checkout state (managed entry, do not edit)
 .igdev/
+
+# local scratch (dev builds, license bypass patch)
+.scratch/

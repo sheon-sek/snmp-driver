@@ -91,7 +91,7 @@ AbstractDeviceModuleHook
 ## Trap/Inform 快速说明
 
 - 在 Device 的 `TRAP` 分类中勾选 `Trap Enabled`，默认关闭；1.0.0 设备配置升级后无需修改，Trap 保持关闭。
-- `Trap Port` 默认 162。Linux 建议配置 10162 并用 nftables 把 UDP 162 重定向过去；Windows 需停用系统 SNMP Trap 服务；Docker 用 `-p 162:10162/udp`。详见 [端口指引](docs/USER_MANUAL_1.1.0_CHANGES.md#9-trap-端口指引)。
+- `Trap Port` 默认 162。Linux 建议配置 10162 并用 nftables 把 UDP 162 重定向过去；Windows 需停用系统 SNMP Trap 服务；Docker 必须固定 MAC 地址；`-p 162:10162/udp` 实测会把源 IP 改写为网关地址，Linux 优先用 host 网络加 nftables。详见 [端口指引](docs/USER_MANUAL_1.1.0_CHANGES.md#9-trap-端口指引)。
 - v3 Trap 需要填写 `Trap Sender Engine ID`；v3 Inform 发送方使用 `Traps/LocalEngineId`。
 - B1 暴露的是 Notification Snapshot（快照 + 计数），不是逐条事件队列；不支持冗余 Gateway。
 
