@@ -171,6 +171,16 @@ class TrapV3InformTest {
         assertFalse(registry.usmStackOf(port).usm().isEngineDiscoveryEnabled());
     }
 
+    /** The Device configuration the system test uses: Trap sender engine set and Inform accepted (#41). */
+    @Test
+    void wrongPrivPassphraseTrapOnAnInformEnabledStackCountsAuthFailure() throws Exception {
+        listen(identity(), SENDER_HEX);
+        TrapV3ReceiveTest.sendV3(port, SENDER, 1, "informuser", org.snmp4j.security.SecurityLevel.AUTH_PRIV, AUTH,
+                "wrongpriv99");
+        assertTrue(waitFor(() -> counters.authFailure() == 1), "authFailure=" + counters.authFailure());
+        assertEquals(0, counters.received());
+    }
+
     @Test
     void v3InformIsAckedAfterEnqueueAndARetransmissionOnlyCountsAsDuplicate() throws Exception {
         listen(identity(), "");

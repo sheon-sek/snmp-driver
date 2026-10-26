@@ -162,6 +162,51 @@ public class TrapV3ReceiveTest {
         assertTrue(notices.stream().anyMatch(text -> text.contains("认证失败")), notices.toString());
     }
 
+    /** SNMP4J fires no AuthenticationFailureEvent for a decryption failure; it must still count (#41). */
+    @Test
+    void wrongPrivPassphraseCountsAuthFailure() throws Exception {
+        int port = listen(recipient(SNMPDeviceConfig.SecurityLevel.AUTH_PRIV, ENGINE_HEX));
+        sendV3(port, ENGINE, 1, "trapuser", SecurityLevel.AUTH_PRIV, AUTH, "wrongpriv99");
+        assertRejected();
+        assertTrue(waitFor(() -> counters.authFailure() == 1), "authFailure=" + counters.authFailure());
+        assertTrue(notices.stream().anyMatch(text -> text.contains("Privacy Passphrase")), notices.toString());
+    }
+
+    /**
+     * The same failure as net-snmp 5.9 sends it (captured with {@code snmptrap -d -v 3 -u trapuser -l authPriv
+     * -a SHA-256 -A authpass123 -x AES -X <wrong> -e 80001f8880aabbccdd01}), found by the M1d system test. The
+     * decrypted garbage differs per packet, so several captures cover the different parse failures.
+     */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+        "3081af020103301102041b521d35020300ffe304010302010304443042040a80001f8880aabbccdd0102010102030fcace0408747261"
+            + "707573657204185e861dadabfd8fdf6ec7c17a1c7bb78c39b942b85936772a0408339d4c584c4be13604518fa866f79179ec1898"
+            + "6e209991b33708293b33bb60de616f670e273d42dea77b03bcfeb3f52234550aa145f67284f4a9255e5320f1b768064ab56fec56"
+            + "58dc17f1740926556586978a7a27e2837f406326",
+        "3081af020103301102040cd74778020300ffe304010302010304443042040a80001f8880aabbccdd0102010102030fe3160408747261"
+            + "70757365720418c3abdccc162d69238718ea3a49affadf00410a06dc1eeae304080f16db715553034a045179dd45b199868f731c"
+            + "947c5586089d0c4c5a842008ad47d6616651b7bdb68b527debb1efce6b3934239977389049627a960d83ddcb7a7dab221acb3b57"
+            + "292abac27b3c2b6adf91045c462a281a90b8b93f",
+        "3081af0201033011020424391138020300ffe304010302010304443042040a80001f8880aabbccdd0102010102030fe33a0408747261"
+            + "70757365720418c5045a75be5899c166a02d4edd516fdfac5eaf782d38d97b0408c6316852922c41fa045142fe0166465db0dfdd"
+            + "4792fdc7b69146a709bac476a3ae79b84b9567bec16ea356833890fec9fe308da6485cb85cb4089844cd402390e33f73b5ec34a0"
+            + "c27f2b67f66de4ecf42e2e30f29b9f82fd011e85",
+        "3081af02010330110204399deec9020300ffe304010302010304443042040a80001f8880aabbccdd0102010102030fe3580408747261"
+            + "70757365720418d1f1f4db2237481f506175afe1175e63a0a52746429f96690408288b9b801b1901ad04519af7a914caae551879"
+            + "856547d5c9ea597443204b1b6c8bcea604c2bbc9b8713566e02359d7153720328bd119643dc32cf1a4e172322570f9d87884a22f"
+            + "98aebfeb2b9f90e5bc608419c791d6d02d112140"
+    })
+    void netSnmpTrapWithWrongPrivPassphraseCountsAuthFailure(String hex) throws Exception {
+        int port = listen(recipient(SNMPDeviceConfig.SecurityLevel.AUTH_PRIV, ENGINE_HEX));
+        byte[] packet = HexFormat.of().parseHex(hex);
+        try (java.net.DatagramSocket socket = new java.net.DatagramSocket()) {
+            socket.send(new java.net.DatagramPacket(packet, packet.length, InetAddress.getLoopbackAddress(), port));
+        }
+        assertRejected();
+        assertTrue(waitFor(() -> counters.authFailure() == 1), "authFailure=" + counters.authFailure());
+        assertTrue(notices.stream().anyMatch(text -> text.contains("Privacy Passphrase")), notices.toString());
+    }
+
     @Test
     void lowerSecurityLevelThanConfiguredCountsAuthFailure() throws Exception {
         int port = listen(recipient(SNMPDeviceConfig.SecurityLevel.AUTH_PRIV, ENGINE_HEX));

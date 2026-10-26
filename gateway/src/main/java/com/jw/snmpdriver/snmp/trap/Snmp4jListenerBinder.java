@@ -54,14 +54,11 @@ public final class Snmp4jListenerBinder implements ListenerBinder {
             dispatcher.addAuthenticationFailureListener(new AuthenticationFailureListener() {
                 @Override
                 public <A extends Address> void authenticationFailure(AuthenticationFailureEvent<A> event) {
-                    TrapUsmStack.Rejection rejection = usm.takeRejection();
-                    if (rejection != TrapUsmStack.Rejection.DISCOVERY
-                            && event.getAddress() instanceof UdpAddress peer) {
-                        handler.onAuthenticationFailure(peer.getInetAddress(), event.getError(),
-                                rejection == TrapUsmStack.Rejection.LOCAL_ENGINE);
-                    }
+                    reportUsmFailure(handler, event.getAddress(), event.getError(), usm.takeRejection());
                 }
             });
+            usm.setSilentRejectionListener((peer, status, rejection) ->
+                    reportUsmFailure(handler, peer, status, rejection));
         }
         Snmp snmp = new Snmp(dispatcher, transport);
         snmp.addCommandResponder(new CommandResponder() {
@@ -77,6 +74,14 @@ public final class Snmp4jListenerBinder implements ListenerBinder {
             throw error;
         }
         return snmp;
+    }
+
+    private static void reportUsmFailure(NotificationHandler handler, Address address, int status,
+                                         TrapUsmStack.Rejection rejection) {
+        if (rejection != TrapUsmStack.Rejection.DISCOVERY && address instanceof UdpAddress peer) {
+            handler.onAuthenticationFailure(peer.getInetAddress(), status,
+                    rejection == TrapUsmStack.Rejection.LOCAL_ENGINE);
+        }
     }
 
     private static void dispatch(CommandResponderEvent<?> event, NotificationHandler handler, TrapUsmStack usm) {
