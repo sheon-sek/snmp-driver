@@ -213,7 +213,7 @@ v3 Inform 发送方可能因此报 `notInTimeWindow`，Gateway 侧计入 `AuthFa
 - 测试条件：Intel Core Ultra 7 165U（14 逻辑核）、31 GiB 内存，Windows 11 + WSL2 Ubuntu 24.04，Docker 29.8.1，Ignition 8.3.10（最大堆 2 GiB）；发送方与 Gateway 在同一台机器上。
 - 负载：50 台 v2c 设备 × 25 个 OID，1 s 轮询。
 - 2000 trap/s 持续 5 min：轮询 p95 延迟 0.90 → 0.96 ms（+6.9%），无超时，Trap 全部接受。
-- 10000 trap/s 突发 30 s：轮询 p95 延迟 0.90 → 1.35 ms（+49.9%，超过 20% 的目标），但无超时、无漏轮询，Trap 全部接受。
+- 10000 trap/s 突发 30 s：轮询 p95 延迟 0.90 → 1.35 ms（+49.9%，超过 20% 的目标），但无超时、无漏轮询，Trap 全部接受。增量绝对值仅 0.45 ms，且突发后无 Trap 时仍高 24.9%，主要是同机主机负载所致；负责人已接受该结果。
 - 所有进入模块的 Notification 都能对上账：`ReceivedCount = AcceptedCount + DroppedRateLimitCount + DroppedQueueFullCount + DroppedUnlicensedCount + DuplicateInformCount`。
 - 约 120000 trap/s 时队列会满：超出部分计入 `DroppedQueueFullCount`，Inform 不 ACK。更高的流量会在操作系统的 UDP 接收缓冲区被丢弃，这部分不出现在设备计数里，只能在系统层面（`netstat -su` 的 receive buffer errors）看到。
 - 堆内存全程在 290–890 MiB 之间正常波动，没有上升趋势。
