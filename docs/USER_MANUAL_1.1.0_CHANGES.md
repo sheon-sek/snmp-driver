@@ -4,11 +4,12 @@
 
 字段名、节点名以当前代码为准（`SNMPDeviceConfig`、`TrapDiagnostics`、`TrapItemPath`）。
 
-> **回填占位**：标注 `【待 #41 回填】`、`【待 #42 回填】`、`【待 #43 回填】` 的段落，需在对应测试票关闭后，按 `docs/test-reports/1.1.0/` 中的报告结论替换。全部回填后才能关闭 #44。
->
-> - #41：net-snmp 系统测试矩阵（含 Docker 端口映射源 IP 实测）
-> - #42：升级、备份恢复与克隆测试（含 `notInTimeWindow` 实测现象）
-> - #43：风暴测试（参考值与硬件条件）
+实测依据见 `docs/test-reports/1.1.0/`：
+
+- `M1D_41_SYSTEM_TEST.md`：net-snmp 系统测试矩阵（含 Docker 端口映射源 IP、固定 MAC）
+- `M1D_42_UPGRADE_RESTORE_CLONE.md`：升级、备份恢复与克隆（含 `notInTimeWindow`）
+- `M1D_43_STORM.md`：风暴测试（参考值与硬件条件）
+- `M1D_32_SET.md`：SNMP SET 写入与 Designer `Bad_GatewayCommOff`
 
 ## 0. 通用修改
 
@@ -219,7 +220,7 @@ v3 Inform 发送方可能因此报 `notInTimeWindow`，Gateway 侧计入 `AuthFa
 
 ## 13. SNMP SET（写入）前提与 Designer 写入
 
-（#32）写入 `RW.<Type>/<OID>` Tag 需同时满足：
+写入 `RW.<Type>/<OID>` Tag 需同时满足：
 
 - Device 的 `Access Mode` 为 `READ_WRITE`；v1/v2c 必须配置 `Write Community`（v3 沿用 V3 用户）。`READ_ONLY` 时写入被拒绝，不发 SNMP SET。
 - Item Path 使用 `RW.` 前缀；不带前缀的路径只读。`TRAP.*` 路径与 `Traps/*` 节点始终只读。

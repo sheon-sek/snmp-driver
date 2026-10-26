@@ -114,5 +114,5 @@ yarn --cwd web-ui run build
 
 - 单元测试与 SNMP4J 进程内集成测试：随代码维护（`./gradlew :gateway:test`）。
 - igdev Gateway 冒烟（M1b/M1c）：已执行。
-- 1.1.0 系统测试（net-snmp 互通、升级、备份恢复与克隆、风暴）：在 M1d 进行，报告位于 `docs/test-reports/1.1.0/`。
+- 1.1.0 系统测试（net-snmp 互通、升级、备份恢复与克隆、风暴、SET 写入）：M1d 已执行（Ignition 8.3.10），报告位于 `docs/test-reports/1.1.0/`（#41/#42/#43/#32）。
 - Development `.modl` 未签名，不是生产 artifact；签名由人工完成。
