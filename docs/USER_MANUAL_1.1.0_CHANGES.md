@@ -216,3 +216,12 @@ v3 Inform 发送方可能因此报 `notInTimeWindow`，Gateway 侧计入 `AuthFa
 - 所有进入模块的 Notification 都能对上账：`ReceivedCount = AcceptedCount + DroppedRateLimitCount + DroppedQueueFullCount + DroppedUnlicensedCount + DuplicateInformCount`。
 - 约 120000 trap/s 时队列会满：超出部分计入 `DroppedQueueFullCount`，Inform 不 ACK。更高的流量会在操作系统的 UDP 接收缓冲区被丢弃，这部分不出现在设备计数里，只能在系统层面（`netstat -su` 的 receive buffer errors）看到。
 - 堆内存全程在 290–890 MiB 之间正常波动，没有上升趋势。
+
+## 13. SNMP SET（写入）前提与 Designer 写入
+
+（#32）写入 `RW.<Type>/<OID>` Tag 需同时满足：
+
+- Device 的 `Access Mode` 为 `READ_WRITE`；v1/v2c 必须配置 `Write Community`（v3 沿用 V3 用户）。`READ_ONLY` 时写入被拒绝，不发 SNMP SET。
+- Item Path 使用 `RW.` 前缀；不带前缀的路径只读。`TRAP.*` 路径与 `Traps/*` 节点始终只读。
+- **Designer 写入**：Designer 的 Comm Mode 必须为 **Read/Write**。Comm Mode 为 Read-Only 或 Off 时，Designer 客户端在本地直接返回 `Bad_GatewayCommOff`，写请求不会发到 Gateway，也不会到达模块或设备。这不是模块或设备故障；把 Comm Mode 切到 Read/Write 后重试即可。
+- 写入成功返回 Good，表示设备已对 SNMP SET 回应成功；Tag 的新值由下一次轮询回读。被拒绝时返回对应 Bad 状态（如 `Bad_NotWritable`、`Bad_UserAccessDenied`、`Bad_TypeMismatch`）。

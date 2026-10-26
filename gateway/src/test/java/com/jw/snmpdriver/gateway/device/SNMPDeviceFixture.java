@@ -31,6 +31,9 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.TimestampsToReturn;
 import org.eclipse.milo.opcua.stack.core.types.structured.ReadValueId;
+import org.eclipse.milo.opcua.stack.core.types.structured.WriteValue;
+import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
+import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
 
 /**
@@ -92,6 +95,27 @@ final class SNMPDeviceFixture implements AutoCloseable {
         if (!servicesStarted) {
             license(licensed);
         }
+    }
+
+    /** A licensed Device with the caller's polling config; {@code secrets} supplies every SecretConfig plaintext. */
+    SNMPDeviceFixture(SNMPDeviceConfig config, SNMPDevice.SecretResolver secrets) throws Exception {
+        trapPort = config.trapPort();
+        GatewayContext gateway = gatewayContext();
+        var setup = ServiceBundle.class.getDeclaredMethod("setupProcess", GatewayContext.class);
+        setup.setAccessible(true);
+        setup.invoke(bundle, gateway);
+        bundle.ensureStarted();
+        license(true);
+        OpcUaServer server = new OpcUaServer(OpcUaServerConfig.builder().build(), null);
+        device = new SNMPDevice(deviceContext(server, gateway), config, bundle, secrets);
+        device.startup();
+    }
+
+    /** Writes the Value attribute of a dynamic Item Path the way the OPC UA server does. */
+    StatusCode writePath(String itemPath, Object value) {
+        WriteValue write = new WriteValue(new NodeId(NAMESPACE, "[probe]" + itemPath), AttributeId.Value.uid(), null,
+                new DataValue(new Variant(value)));
+        return device.write(null, List.of(write)).get(0);
     }
 
     /** Current value of a node under {@code [Device]/Traps/}, e.g. {@code "Last/Json"}. */

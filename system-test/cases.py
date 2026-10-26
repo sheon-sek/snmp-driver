@@ -427,7 +427,8 @@ def restart_gateway_inform():
 def module_reinstall():
     from st import igdev, ROOT, wait_for as wf, opc, pin_gateway_identity
     dev = v2c_device()
-    modl = sorted((ROOT.parent / ".igdev" / "modules").glob("*.modl"))[-1]
+    # igdev 0.3.1 can leave empty root-owned directories named *.modl behind; only files are archives
+    modl = sorted(p for p in (ROOT.parent / ".igdev" / "modules").glob("*.modl") if p.is_file())[-1]
     igdev("module", "install", str(modl))
     igdev("gateway", "ensure")
     pin_gateway_identity()  # module install re-renders the compose file without the pinned MAC
@@ -530,3 +531,50 @@ def docker_udp162():
 @case("cleanup")
 def cleanup():
     delete_all_devices()
+
+
+# ---------------------------------------------------------------- SET (#32)
+
+SET_OID = "1.3.6.1.4.1.53864.1.0"
+SET_ITEM = "RW.Integer32/" + SET_OID
+
+
+@case("set:v2c-integer32-write-readback")
+def v2c_set_integer32():
+    return set_write_readback(trap=False)
+
+
+@case("set:v2c-integer32-write-readback-trap-on")
+def v2c_set_integer32_trap_on():
+    out = set_write_readback(trap=True)
+    b = counters("st-set")
+    send(V2C_TRAP.format(c=COMM))
+    accepted_one("st-set", b)
+    return out + "; Trap still accepted"
+
+
+def set_write_readback(trap):
+    """OPC UA write -> SNMP SET with the Write Community -> agent value -> poll reads it back; READ_ONLY is refused."""
+    from st import opc, poll, start_agent
+    start_agent()
+    sx(f"snmpset -v2c -c st-private localhost {SET_OID} i 5")
+    dev = "st-set"
+    create_device(dev, host=me(), version="V2C", readCommunity=COMM, writeCommunity="st-private",
+                  accessMode="READ_WRITE", trapEnabled=trap, trapPort=TRAP_PORT)
+    if trap:
+        wait_status(dev, "Listening")
+    check(poll(dev, SET_ITEM, 4) == 5, "initial poll did not read 5")
+    nid = f"ns=1;s=[{dev}]{SET_ITEM}"
+    status = json.loads([ln for ln in opc("write", nid, "Int32", "42").splitlines() if ln.startswith("{")][-1])[nid]
+    check(status == "Good", f"write status {status}")
+    agent = sx(f"snmpget -v2c -Oqv -c {COMM} localhost {SET_OID}").stdout.strip()
+    check(agent == "42", f"agent value after SET: {agent!r}")
+    back = poll(dev, SET_ITEM, 4)
+    check(back == 42, f"poll read back {back!r}")
+    update_device(dev, accessMode="READ_ONLY")
+    time.sleep(2)
+    ro = json.loads([ln for ln in opc("write", nid, "Int32", "7").splitlines() if ln.startswith("{")][-1])[nid]
+    check(ro in ("BadNotWritable", "BadUserAccessDenied"), f"READ_ONLY write status {ro}")
+    agent = sx(f"snmpget -v2c -Oqv -c {COMM} localhost {SET_OID}").stdout.strip()
+    check(agent == "42", f"READ_ONLY write reached the agent: {agent!r}")
+    return f"write Good, agent 5->42, poll {back}; READ_ONLY -> {ro}"

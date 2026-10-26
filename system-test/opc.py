@@ -3,6 +3,7 @@
 Usage (inside the systest container):
   python opc.py browse [nodeid] [depth]
   python opc.py read <nodeid> [<nodeid> ...]     -> one JSON line {nodeid: value}
+  python opc.py write <nodeid> <variant-type> <value> -> one JSON line {nodeid: status}
 
 Connects with Basic256Sha256/SignAndEncrypt as the Gateway admin user
 (IG_USER / IG_PASS env). The client certificate lives in /work/.pki and must
@@ -90,6 +91,14 @@ async def main(argv):
                 dv = await c.get_node(nid).read_data_value(raise_on_bad_status=False)
                 out[nid] = plain(dv.Value.Value) if dv.StatusCode.is_good() else "BAD:" + dv.StatusCode.name
             print(json.dumps(out))
+        elif argv[0] == "write":
+            # write <nodeid> <VariantType name, e.g. Int32> <value>: one Value write, report the status
+            nid, vt = argv[1], getattr(ua.VariantType, argv[2])
+            num = vt.name.startswith(("Int", "UInt", "Byte", "SByte"))
+            val = int(argv[3]) if num else float(argv[3]) if vt.name in ("Float", "Double") else argv[3]
+            res = await c.uaclient.write_attributes([ua.NodeId.from_string(nid)],
+                                                    [ua.DataValue(ua.Variant(val, vt))], ua.AttributeIds.Value)
+            print(json.dumps({nid: res[0].name}))
     finally:
         await c.disconnect()
 
