@@ -46,3 +46,19 @@ admin 口令在运行时从 `igdev gateway credentials` 读取，通过环境变
 - `restart:*`、`module:*`：会重启 Gateway。
 - `docker:udp162-mapping-source-ip`：临时给 compose 加上 `162:10162/udp` 并重建容器，结束时在 `finally` 中撤回。需要主机 UDP 162 没有被占用。
 - `v3:inform-replay-stale`：要等 160 s 让报文超出时间窗。
+
+## 风暴测试（#43）
+
+| 文件 | 作用 |
+|---|---|
+| `storm.py` | 主机侧：建 50 台 `st-storm-*` 设备（每台一个 IP 别名 172.18.250.x）、分阶段注入、采样堆与 UDP 计数、分析 |
+| `storm_box.py` | 容器内：预编码 BER 的 Trap/Inform 发包器（统计 Inform ACK）；订阅 1250 个 Item 的 OPC UA 探针 |
+
+```bash
+python3 system-test/st.py setup     # systest 容器需 NET_ADMIN（IP 别名）和 tcpdump
+python3 system-test/storm.py run --baseline 180 --storm 300 --burst 30 --flood 10 --recovery 120
+python3 system-test/storm.py analyze system-test/out/storm-<ts>
+python3 system-test/storm.py cleanup
+```
+
+轮询延迟 = 驱动给 `sysUpTime.0` 打的 SourceTimestamp − agent 侧 pcap 中对应 GET 的时刻。结果见 `docs/test-reports/1.1.0/M1D_43_STORM.md`。

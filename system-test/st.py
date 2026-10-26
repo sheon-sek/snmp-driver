@@ -358,6 +358,7 @@ def setup():
     run(["docker", "build", "-q", "-t", IMAGE, str(ROOT)], timeout=900)
     run(["docker", "rm", "-f", CONTAINER], check=False)
     run(["docker", "run", "-d", "--name", CONTAINER, "--hostname", CONTAINER, "--network", gi["network"],
+         "--cap-add", "NET_ADMIN",  # storm.py adds per-Device IP aliases
          "-v", f"{ROOT}:/work", IMAGE])
     try:
         opc("browse", "", "0")

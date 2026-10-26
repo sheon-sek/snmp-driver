@@ -207,4 +207,12 @@ v3 Inform 发送方可能因此报 `notInTimeWindow`，Gateway 侧计入 `AuthFa
 
 模块常量：每个 listener 队列 10 000 条、1 个 worker；每条 Trap 最多 128 个 varbind；PDU 最大 65 535 B；Inform 去重 TTL 60 s。队列满时 Trap 计入 `DroppedQueueFullCount`，Inform 不 ACK。
 
-参考值：【待 #43 回填：50 设备 × 25 OID、1 s 轮询，同时 2000 trap/s 持续 5 min 与 10000 trap/s 突发 30 s 下的轮询 p95 延迟增幅、超时、丢弃计数对账、堆内存表现，以及测试硬件条件（CPU、内存、OS、Docker 版本）】
+参考值（本机单次测试，详见 `docs/test-reports/1.1.0/M1D_43_STORM.md`）：
+
+- 测试条件：Intel Core Ultra 7 165U（14 逻辑核）、31 GiB 内存，Windows 11 + WSL2 Ubuntu 24.04，Docker 29.8.1，Ignition 8.3.10（最大堆 2 GiB）；发送方与 Gateway 在同一台机器上。
+- 负载：50 台 v2c 设备 × 25 个 OID，1 s 轮询。
+- 2000 trap/s 持续 5 min：轮询 p95 延迟 0.90 → 0.96 ms（+6.9%），无超时，Trap 全部接受。
+- 10000 trap/s 突发 30 s：轮询 p95 延迟 0.90 → 1.35 ms（+49.9%，超过 20% 的目标），但无超时、无漏轮询，Trap 全部接受。
+- 所有进入模块的 Notification 都能对上账：`ReceivedCount = AcceptedCount + DroppedRateLimitCount + DroppedQueueFullCount + DroppedUnlicensedCount + DuplicateInformCount`。
+- 约 120000 trap/s 时队列会满：超出部分计入 `DroppedQueueFullCount`，Inform 不 ACK。更高的流量会在操作系统的 UDP 接收缓冲区被丢弃，这部分不出现在设备计数里，只能在系统层面（`netstat -su` 的 receive buffer errors）看到。
+- 堆内存全程在 290–890 MiB 之间正常波动，没有上升趋势。
