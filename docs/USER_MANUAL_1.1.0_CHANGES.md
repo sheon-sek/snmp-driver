@@ -188,7 +188,15 @@ v3 Inform 发送方可能因此报 `notInTimeWindow`，Gateway 侧计入 `AuthFa
 
 处置：在发送方重新做 engineID discovery，或清除发送方对 Gateway 的引擎缓存（例如重启发送方的 SNMP 进程）。
 
-实测现象：【待 #42 回填：真实 `.gwbk` 恢复（恢复 local / 不恢复 local 两种）后 `LocalEngineId` 与 boots 的变化、net-snmp 发送方的实际报错与恢复步骤；克隆后 `.cloned-<ts>` 与新 engineID 的实测结果】
+实测现象（#42，Ignition 8.3.10，报告见 `docs/test-reports/1.1.0/M1D_42_UPGRADE_RESTORE_CLONE.md`）：
+
+| 场景 | `LocalEngineId` | engineBoots | v3 Inform 发送方 |
+|---|---|---|---|
+| 同一台 Gateway 恢复 `.gwbk`，**不恢复 local**（`restoreLocal=false`） | 不变 | 继续 +1（5→6） | 正常，没有报错 |
+| 同一台 Gateway 恢复 `.gwbk`，**恢复 local**（`restoreLocal=true`） | 不变 | 回退到备份值 +1（6→5，备份时为 4） | 仍持有旧 boots 的报文被拒绝：Gateway 回 notInTimeWindow Report，`AuthFailureCount` +1，`LastError` 如上；net-snmp 重新 discovery 后（新进程或清除引擎缓存）立即恢复 |
+| 在另一台 Gateway 恢复同一份 `.gwbk` 并恢复 local（克隆） | 重新生成 | 从 1 开始 | 原 engineID 的配置在新机器上失效，需要按新的 `LocalEngineId` 重新配置；旧文件保留为 `trap-engine.properties.cloned-<ts>`，`LastError` 写明备份文件名和处置方法 |
+
+建议：在同一台 Gateway 上做日常恢复时不勾选“恢复 local”，engineBoots 就能保持单调递增。只有整机迁移时才恢复 local，迁移后到新机器上核对 `LocalEngineId`。
 
 ## 11. License 行为
 
