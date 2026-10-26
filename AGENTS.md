@@ -76,7 +76,7 @@ AbstractDeviceModuleHook
 所有命令从以下 repo root 执行：
 
 ```text
-D:\EETARP\01_Projects\200136_SNMP Driver\Source Code\snmp-driver-3
+~/snmp-driver   (WSL Ubuntu-24.04；Windows 主机上通过 wsl 执行)
 ```
 
 ```powershell
@@ -104,3 +104,9 @@ yarn --cwd web-ui run build
 - License management 使用 Ignition Gateway Web UI session access control。
 - POST License routes 必须保留 CSRF access control。
 - Development `.modl` 未签名，不是生产 artifact。
+
+<!-- igdev:start -->
+<!-- managed by igdev; edit outside these markers only -->
+## igdev
+`igdev.toml` declares this repository's Ignition toolchain; run `igdev status` first, and prefer `igdev gateway` verbs for the Gateway, and use docker or curl directly when no verb covers the need.
+<!-- igdev:end -->

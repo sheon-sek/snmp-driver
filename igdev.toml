@@ -1,0 +1,31 @@
+# igdev Project Contract (schema 1).
+#
+# Written by `igdev init`; every igdev write prints a unified diff, so tracked
+# changes stay reviewable. Hand-editing this file makes the Checkout Setup stale:
+# run `igdev setup` afterwards.
+
+schema = 1
+
+[project]
+name = "snmp-driver"
+
+[ignition]
+version = "8.3.10"
+jython_version = "2.7.4"
+edition = "standard"
+
+[modules]
+enabled = []
+artifacts = ["build/*.modl"]
+
+[scan]
+jython = ["src/main/python"]
+capabilities = ["src/main/python"]
+
+[commands]
+test = "bash ./gradlew :base:test :gateway:test"
+build = "bash ./gradlew build"
+
+[gateway]
+memory_mb = 2048
+timezone = "UTC"

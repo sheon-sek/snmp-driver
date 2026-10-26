@@ -279,3 +279,6 @@ CLAUDE.md
 # _docs/
 _templates/
 _references/
+
+# igdev: disposable checkout state (managed entry, do not edit)
+.igdev/
