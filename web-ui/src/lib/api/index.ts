@@ -74,7 +74,7 @@ const dynamicQuery: BaseQueryFn<
     }
   }
 
-  return result;
+  return { data: result.data, meta: result.meta };
 };
 
 function runtimeContext(value: unknown): ApiRuntimeContext {
