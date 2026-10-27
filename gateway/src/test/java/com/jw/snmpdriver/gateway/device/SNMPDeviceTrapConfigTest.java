@@ -51,6 +51,36 @@ class SNMPDeviceTrapConfigTest {
         assertTrue(config.trapAcceptInform());
         assertEquals("", config.trapSourceAllowlist());
         assertEquals(100, config.trapRateLimitPerSecond());
+        assertEquals("", config.recordHandlerProject());
+        assertEquals("", config.recordHandlerFunction());
+    }
+
+    @Test
+    void recordHandlerFieldsDefaultToEmpty() {
+        assertEquals("", SNMPDeviceConfig.defaults().recordHandlerProject());
+        assertEquals("", SNMPDeviceConfig.defaults().recordHandlerFunction());
+    }
+
+    @Test
+    void explicitRecordHandlerValuesAreKept() throws Exception {
+        SNMPDeviceConfig config = decode(Map.of(
+                "recordHandlerProject", "Plant",
+                "recordHandlerFunction", "snmp.handlers.onNotification"));
+
+        assertEquals("Plant", config.recordHandlerProject());
+        assertEquals("snmp.handlers.onNotification", config.recordHandlerFunction());
+    }
+
+    @Test
+    void rejectsRecordHandlerFunctionThatIsNotADottedPath() throws Exception {
+        for (String function : new String[] {"onNotification", "snmp..onNotification", "1snmp.handler",
+                "snmp.handler.", ".snmp.handler", "snmp handlers.on", "snmp.on()", "snmp.on-off", "snmp/on"}) {
+            assertFieldError("recordHandlerFunction", decode(Map.of("recordHandlerFunction", function)));
+        }
+        for (String function : new String[] {"", "  ", "snmp.handlers.onNotification", "a.b", "_x.y_1",
+                " snmp.handlers.onNotification "}) {
+            assertEquals(Map.of(), fieldErrors(decode(Map.of("recordHandlerFunction", function))), function);
+        }
     }
 
     @Test

@@ -131,6 +131,80 @@ def wait_for(fn, timeout=15.0, interval=0.5, what="condition"):
     raise AssertionError(f"timeout waiting for {what}; last={last!r}")
 
 
+# ---------------------------------------------------------------- Record Delivery project fixture
+
+RECORD_PROJECT = "st-records"
+RECORD_FUNCTION = "snmp.handlers.onNotification"
+RECORD_FILE = "/tmp/snmp-driver-st-records.jsonl"
+RECORD_CONTROL = "/tmp/snmp-driver-st-records-control.json"
+
+
+def import_record_project(overwrite=False, version="v1"):
+    """Import the isolated test project; overwriting is always explicit.
+
+    version="v2" changes the actual Script Library source for hot-update tests.
+    Neither this function nor a script import clears collected records.
+    """
+    if version not in ("v1", "v2"):
+        raise ValueError("record fixture version must be v1 or v2")
+    source = ROOT / "projects" / RECORD_PROJECT
+    if version != "v1":
+        target = OUT / ("record-project-" + version)
+        for path in source.rglob("*"):
+            if path.is_file():
+                dest = target / path.relative_to(source)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                text = path.read_text()
+                if path.name == "code.py":
+                    text = text.replace('VERSION = "v1"', 'VERSION = "v2"')
+                dest.write_text(text)
+        source = target
+    args = ["project", "import", str(source), "--name", RECORD_PROJECT]
+    if overwrite:
+        args.append("--overwrite")
+    return igdev(*args)
+
+
+def set_record_handler(mode="normal", delay_millis=6000, version=None):
+    """Select normal/exception/slow behavior without importing a project.
+
+    version optionally overrides the label for assertions; use
+    import_record_project(version="v2", overwrite=True) to test a real script save.
+    An already executing handler keeps its captured configuration.
+    """
+    if mode not in ("normal", "exception", "slow"):
+        raise ValueError("record handler mode must be normal, exception or slow")
+    if not isinstance(delay_millis, int) or delay_millis < 0:
+        raise ValueError("delay_millis must be a nonnegative integer")
+    config = {"mode": mode, "delayMillis": delay_millis}
+    if version is not None:
+        config["version"] = str(version)
+    # Atomic rename means a concurrent handler sees either complete config.
+    run(["docker", "exec", "-i", gateway_info()["container"], "sh", "-c",
+         "cat > /tmp/snmp-driver-st-records-control.next && "
+         "mv /tmp/snmp-driver-st-records-control.next /tmp/snmp-driver-st-records-control.json"],
+        input=json.dumps(config))
+
+
+def read_records(with_metadata=False):
+    """Read complete sink lines in append order; default returns decoded records.
+
+    with_metadata=True returns {"version": ..., "record": <raw JSON string>}.
+    A last line still being written is ignored until the next read.
+    """
+    p = run(["docker", "exec", gateway_info()["container"], "sh", "-c",
+             "if test -f /tmp/snmp-driver-st-records.jsonl; then "
+             "cat /tmp/snmp-driver-st-records.jsonl; fi"])
+    entries = [json.loads(line) for line in p.stdout.splitlines(keepends=True)
+               if line.endswith("\n")]
+    return entries if with_metadata else [json.loads(entry["record"]) for entry in entries]
+
+
+def clear_records():
+    """Truncate only the test sink; stop senders and drain handlers before calling."""
+    run(["docker", "exec", gateway_info()["container"], "truncate", "-s", "0", RECORD_FILE])
+
+
 # ---------------------------------------------------------------- devices
 
 DEFAULTS = {

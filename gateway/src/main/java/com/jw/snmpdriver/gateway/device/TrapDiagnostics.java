@@ -45,6 +45,7 @@ public final class TrapDiagnostics {
     static final String LISTENER_ENDPOINT = "ListenerEndpoint";
     static final String LOCAL_ENGINE_ID = "LocalEngineId";
     static final String OVERFLOW_COUNT = "OverflowCount";
+    static final String RECORD_DELIVERED_COUNT = "RecordDeliveredCount";
     static final String LAST_FOLDER = "Last";
     static final String LAST_SEQUENCE = "Last/Sequence";
     static final String LAST_RECEIVED_TIME = "Last/ReceivedTime";
@@ -98,6 +99,7 @@ public final class TrapDiagnostics {
             NODES.put(name, NodeType.UINT64);
         }
         NODES.put(OVERFLOW_COUNT, NodeType.UINT64);
+        NODES.put(RECORD_DELIVERED_COUNT, NodeType.UINT64);
         NODES.put(LAST_SEQUENCE, NodeType.UINT64);
         NODES.put(LAST_RECEIVED_TIME, NodeType.DATE_TIME);
         NODES.put(LAST_PDU_TYPE, NodeType.STRING);
@@ -166,9 +168,13 @@ public final class TrapDiagnostics {
         this.counterSources = counterSources;
     }
 
-    /** Writes to variable nodes created by {@link #createUnder}. */
+    /**
+     * Writes to variable nodes created by {@link #createUnder}. {@code recordDelivered} counts Record handler
+     * calls that returned normally; it stays 0 on a Device without a Record Handler Function.
+     */
     public static TrapDiagnostics forNodes(SNMPDevice addressSpace, DeviceContext context,
-                                           Supplier<LicenseGate.Verdict> license, TrapCounters counters) {
+                                           Supplier<LicenseGate.Verdict> license, TrapCounters counters,
+                                           LongSupplier recordDelivered) {
         NodeWriter writer = new NodeWriter(addressSpace, context);
         Map<String, LongSupplier> sources = new LinkedHashMap<>();
         TrapDiagnostics diagnostics = new TrapDiagnostics(writer::set, license, sources);
@@ -182,6 +188,7 @@ public final class TrapDiagnostics {
         sources.put("ListenerUnmatchedCount", () -> diagnostics.listenerCount(false));
         sources.put("ListenerMultiMatchCount", () -> diagnostics.listenerCount(true));
         sources.put(OVERFLOW_COUNT, diagnostics.oidStates::overflowCount);
+        sources.put(RECORD_DELIVERED_COUNT, recordDelivered);
         diagnostics.writer = writer;
         return diagnostics;
     }
@@ -194,8 +201,8 @@ public final class TrapDiagnostics {
         return multiMatch ? current.multiMatchCount() : current.unmatchedCount();
     }
 
-    /** Called on the listener worker for every accepted Notification. */
-    public synchronized void accept(TrapNotification notification) {
+    /** Called on the listener worker for every accepted Notification; returns the snapshot it published. */
+    public synchronized TrapState.Snapshot accept(TrapNotification notification) {
         TrapState.Snapshot snapshot = state.record(notification);
         TrapOidStates.Entry entry = oidStates.record(snapshot.trapOid(), snapshot.sequence(), snapshot.receivedAt(),
                 snapshot.varbindsJson());
@@ -209,6 +216,7 @@ public final class TrapDiagnostics {
                 }
             }
         }
+        return snapshot;
     }
 
     /**

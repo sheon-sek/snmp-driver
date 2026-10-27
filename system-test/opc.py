@@ -85,6 +85,26 @@ async def main(argv):
             await asyncio.sleep(seconds)
             await sub.delete()
             print(json.dumps(last))
+        elif argv[0] == "capture":
+            # capture <seconds> <nodeid> <sender command>: read snapshots in one session
+            # while the sender runs, avoiding a new OPC UA handshake between packets.
+            seconds, nid, command = float(argv[1]), argv[2], argv[3]
+            node = c.get_node(nid)
+            sender = await asyncio.create_subprocess_shell(command, stdout=asyncio.subprocess.PIPE,
+                                                            stderr=asyncio.subprocess.PIPE)
+            snapshots = []
+            deadline = asyncio.get_running_loop().time() + seconds
+            try:
+                while asyncio.get_running_loop().time() < deadline:
+                    value = plain(await node.read_value())
+                    if not snapshots or snapshots[-1] != value:
+                        snapshots.append(value)
+                    await asyncio.sleep(0.02)
+            finally:
+                _, errors = await sender.communicate()
+            if sender.returncode:
+                raise RuntimeError("sender failed: " + errors.decode())
+            print(json.dumps(snapshots))
         elif argv[0] == "read":
             out = {}
             for nid in argv[1:]:

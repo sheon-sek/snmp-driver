@@ -36,8 +36,8 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
     }
 
     /**
-     * 1.0.0 配置没有 trap* 字段；record 缺字段只得 0/false/null，所以只为缺失的 trap* 补默认值，
-     * 显式给出的值（包括非法值）原样保留，交给 {@link #validate}。
+     * 1.0.0 配置没有 trap* 字段，1.1.0 早期配置没有 recordHandler* 字段；record 缺字段只得 0/false/null，
+     * 所以只为缺失的这两组字段补默认值，显式给出的值（包括非法值）原样保留，交给 {@link #validate}。
      */
     @Override
     public SNMPDeviceConfig decode(JsonElement json) throws DecodingException {
@@ -46,7 +46,8 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
             JsonObject defaults = encode(SNMPDeviceConfig.defaults()).getAsJsonObject();
             for (RecordComponent component : SNMPDeviceConfig.class.getRecordComponents()) {
                 String name = component.getName();
-                if (name.startsWith("trap") && !object.has(name) && defaults.has(name)) {
+                boolean defaulted = name.startsWith("trap") || name.startsWith("recordHandler");
+                if (defaulted && !object.has(name) && defaults.has(name)) {
                     object.add(name, defaults.get(name));
                 }
             }
@@ -158,6 +159,12 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
                 "trapSourceAllowlist", "Trap source allowlist must be comma-separated IP addresses or CIDR ranges.");
         errors.checkField(config.trapRateLimitPerSecond() >= 1 && config.trapRateLimitPerSecond() <= 10_000,
                 "trapRateLimitPerSecond", "Trap rate limit must be 1-10000 per second.");
+        // only the format: whether the project and function exist is checked at runtime (ADR 0007)
+        String function = config.recordHandlerFunction();
+        errors.checkField(function == null || function.isBlank()
+                        || SNMPDeviceConfig.isValidRecordHandlerFunction(function),
+                "recordHandlerFunction",
+                "Record handler function must be a dotted Script Library path such as snmp.handlers.onNotification.");
 
         if (!config.trapEnabled()) {
             return;

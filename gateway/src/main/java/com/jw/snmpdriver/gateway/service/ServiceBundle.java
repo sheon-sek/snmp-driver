@@ -7,6 +7,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +35,9 @@ import org.snmp4j.mp.MPv3;
 
 public final class ServiceBundle extends AbstractBundle {
     private static final AtomicInteger POLL_THREAD_ID = new AtomicInteger();
+    private static final AtomicInteger RECORD_THREAD_ID = new AtomicInteger();
+    /** Record Delivery threads shared by all Devices; one Device uses at most one at a time (ADR 0010). */
+    private static final int RECORD_THREADS = 4;
 
     private final ConcurrentMap<String, Device> devices = new ConcurrentHashMap<>();
 
@@ -46,6 +51,7 @@ public final class ServiceBundle extends AbstractBundle {
     private SharedPollCoordinator runtime;
     private CallbackExecutor callbacks;
     private TrapListenerRegistry trapRegistry;
+    private volatile ExecutorService recordExecutor;
 
     @Override
     protected synchronized void setupProcess(GatewayContext context) {
@@ -127,6 +133,14 @@ public final class ServiceBundle extends AbstractBundle {
                 return thread;
             });
             callbacks = new CallbackExecutor();
+            recordExecutor = Executors.newFixedThreadPool(RECORD_THREADS, runnable -> {
+                Thread thread = new Thread(
+                        runnable,
+                        "snmp-record-" + RECORD_THREAD_ID.incrementAndGet()
+                );
+                thread.setDaemon(true);
+                return thread;
+            });
             runtime = new SharedPollCoordinator(requestClient, scheduler, callbacks);
             requestClient.start();
             runtime.start();
@@ -187,6 +201,14 @@ public final class ServiceBundle extends AbstractBundle {
     public synchronized ScheduledExecutorService scheduler() {
         requireRunning();
         return scheduler;
+    }
+
+    /**
+     * The pool that runs Record handler calls; null when the services are not running. Lock-free for the same
+     * reason as {@link #licenseVerdict()}: the Trap listener worker reaches it.
+     */
+    public Executor recordExecutor() {
+        return recordExecutor;
     }
 
     public synchronized SharedPollCoordinator runtime() {
@@ -252,6 +274,16 @@ public final class ServiceBundle extends AbstractBundle {
                 Thread.currentThread().interrupt();
             } catch (RuntimeException error) {
                 logger.warn("Failed to stop SNMP callbacks cleanly", error);
+            }
+        }
+        ExecutorService records = recordExecutor;
+        recordExecutor = null;
+        if (records != null) {
+            try {
+                // no interrupt: a handler call already running finishes on its own
+                records.shutdown();
+            } catch (RuntimeException error) {
+                logger.warn("Failed to stop Record Delivery pool cleanly", error);
             }
         }
         if (requestClient != null) {

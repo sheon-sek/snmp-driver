@@ -3,7 +3,8 @@ import json
 import time
 
 from st import (hex_blocks, case, check, counters, create_device, delete_all_devices, delete_device, delta, inform_bytes,
-                read, replay, send, sx, update_device, wait_for, wait_status, container_ip, CONTAINER, TRAP_PORT)
+                read, replay, send, sx, opc, update_device, wait_for, wait_status, container_ip, CONTAINER, TRAP_PORT,
+                import_record_project, set_record_handler, read_records, clear_records)
 
 COMM = "st-public"
 V2C_TRAP = "snmptrap -v 2c -c {c} {{gw}} '' 1.3.6.1.6.3.1.1.5.3 1.3.6.1.2.1.2.2.1.1.1 i 1"
@@ -578,3 +579,89 @@ def set_write_readback(trap):
     agent = sx(f"snmpget -v2c -Oqv -c {COMM} localhost {SET_OID}").stdout.strip()
     check(agent == "42", f"READ_ONLY write reached the agent: {agent!r}")
     return f"write Good, agent 5->42, poll {back}; READ_ONLY -> {ro}"
+
+
+# ---------------------------------------------------------------- Record Delivery (#48)
+
+
+def prepare_records():
+    import_record_project(overwrite=True)
+    set_record_handler("normal")
+    clear_records()
+
+
+def record_device(name):
+    return v2c_device(name, recordHandlerProject="st-records",
+                      recordHandlerFunction="snmp.handlers.onNotification")
+
+
+def delivered(dev, count):
+    wait_for(lambda: read(dev, "RecordDeliveredCount")["RecordDeliveredCount"] == count,
+             15, what=f"{dev} delivered {count}")
+
+
+@case("record:ten-at-500ms")
+def record_ten():
+    prepare_records()
+    dev = record_device("st-record-ten")
+    snapshots = []
+    try:
+        # A separate sender maintains 500 ms spacing while OPC UA reads capture every snapshot.
+        command = ("for i in $(seq 1 10); do snmptrap -v 2c -c " + COMM +
+                   " {gw} '' 1.3.6.1.6.3.1.1.5.3 1.3.6.1.2.1.2.2.1.1.1 i $i; sleep 0.5; done")
+        output = opc("capture", "6", f"ns=1;s=[{dev}]Traps/Last/Json",
+                     command.replace("{gw}", f"gateway:{TRAP_PORT}"))
+        captured = json.loads([line for line in output.splitlines() if line.startswith("[")][-1])
+        snapshots = [json.loads(value) for value in captured if value and json.loads(value).get("sequence", 0) > 0]
+        check([last["sequence"] for last in snapshots] == list(range(1, 11)),
+              f"did not capture all ten snapshots: {snapshots}")
+        delivered(dev, 10)
+        records = read_records()
+        check(len(records) == 10, f"handler called {len(records)} times")
+        check(records == [dict(device=dev, **last) for last in snapshots],
+              f"Records differ from corresponding Last/Json: {records}")
+        check(counters(dev)["AcceptedCount"] == 10, "AcceptedCount != 10")
+        return "10 calls in order; each Record equals its Last/Json plus device"
+    finally:
+        delete_device(dev)
+
+
+@case("record:multi-device")
+def record_multi_device():
+    prepare_records()
+    a, b = record_device("st-record-a"), record_device("st-record-b")
+    try:
+        send(V2C_TRAP.format(c=COMM))
+        delivered(a, 1)
+        delivered(b, 1)
+        records = read_records()
+        check(len(records) == 2, f"expected two calls: {records}")
+        by_device = {r["device"]: r for r in records}
+        check(set(by_device) == {a, b}, f"device attribution: {records}")
+        for dev in (a, b):
+            last = json.loads(read(dev, "Last/Json")["Last/Json"])
+            check(by_device[dev] == dict(device=dev, **last), f"Record mismatch: {dev}")
+    finally:
+        delete_device(a)
+        delete_device(b)
+
+
+@case("record:unconfigured")
+def record_unconfigured():
+    prepare_records()
+    dev = v2c_device("st-record-none")
+    control = record_device("st-record-control")
+    try:
+        before = counters(dev)
+        send(V2C_TRAP.format(c=COMM))
+        _, last = accepted_one(dev, before, pduType="V2_TRAP", version="V2C")
+        delivered(control, 1)
+        check(read(dev, "RecordDeliveredCount")["RecordDeliveredCount"] == 0,
+              "unconfigured Device counted a delivery")
+        check("device" not in last and last["sequence"] == 1, f"snapshot changed: {last}")
+        records = read_records()
+        check(len(records) == 1 and records[0]["device"] == control,
+              f"unconfigured Device produced a Record: {records}")
+    finally:
+        delete_device(dev)
+        delete_device(control)

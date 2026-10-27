@@ -1,0 +1,191 @@
+package com.jw.snmpdriver.gateway.device;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.snmp4j.CommunityTarget;
+import org.snmp4j.PDU;
+import org.snmp4j.Snmp;
+import org.snmp4j.mp.SnmpConstants;
+import org.snmp4j.smi.GenericAddress;
+import org.snmp4j.smi.Integer32;
+import org.snmp4j.smi.OID;
+import org.snmp4j.smi.OctetString;
+import org.snmp4j.smi.TimeTicks;
+import org.snmp4j.smi.VariableBinding;
+import org.snmp4j.transport.DefaultUdpTransportMapping;
+
+/** Record Delivery (ADR 0010, #48) through a real SNMPDevice and Trap listener, with a fake handler. */
+class SNMPDeviceRecordDeliveryTest {
+    private static final String FUNCTION = "snmp.handlers.onNotification";
+    private static final Pattern SEQUENCE = Pattern.compile("\"sequence\":(\\d+),");
+
+    private SNMPDeviceFixture fixture;
+
+    @AfterEach
+    void tearDown() {
+        if (fixture != null) {
+            fixture.close();
+        }
+    }
+
+    @Test
+    void everyAcceptedNotificationCallsTheHandlerOnceInArrivalOrderOneAtATime() throws Exception {
+        FakeHandler handler = new FakeHandler();
+        handler.holdFirstCall();
+        fixture = new SNMPDeviceFixture(FUNCTION, handler);
+        await("Listening", () -> "Listening".equals(fixture.value("Status")));
+
+        for (int i = 1; i <= 10; i++) {
+            sendV2cTrap(fixture.trapPort, i);
+        }
+        // the first call is still blocked, yet every Notification is received and published
+        await("Sequence 10", () -> fixture.value("Last/Json") instanceof String json
+                && json.startsWith("{\"sequence\":10,"));
+        assertTrue(handler.calls.size() <= 1, "handler calls must not hold up receiving");
+        handler.release();
+
+        await("10 handler calls", () -> handler.calls.size() == 10);
+        List<Long> sequences = new ArrayList<>();
+        for (Call call : handler.calls) {
+            assertEquals("recordProject", call.project());
+            assertEquals(FUNCTION, call.function());
+            assertTrue(call.record().startsWith("{\"device\":\"probe\",\"sequence\":"), call.record());
+            assertTrue(call.thread().startsWith("snmp-record-"), call.thread());
+            sequences.add(sequenceOf(call.record()));
+        }
+        assertEquals(List.of(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L), sequences);
+        assertEquals(1, handler.maxInFlight.get(), "one call at a time per Device");
+        // the Record is Last/Json plus the device field
+        assertEquals("{\"device\":\"probe\"," + ((String) fixture.value("Last/Json")).substring(1),
+                handler.calls.get(9).record());
+        await("RecordDeliveredCount 10",
+                () -> Unsigned.ulong(10).equals(fixture.value("RecordDeliveredCount")));
+        assertEquals(Unsigned.ulong(10), fixture.value("AcceptedCount"));
+    }
+
+    @Test
+    void notificationMatchingTwoDevicesCallsEachDevicesHandlerOnce() throws Exception {
+        FakeHandler first = new FakeHandler();
+        FakeHandler second = new FakeHandler();
+        fixture = new SNMPDeviceFixture(FUNCTION, first);
+        SNMPDevice other = fixture.addDevice("second", FUNCTION, second);
+        await("Listening", () -> "Listening".equals(fixture.value("Status"))
+                && "Listening".equals(valueOf(other, "Status")));
+
+        sendV2cTrap(fixture.trapPort, 7);
+
+        await("both handlers called", () -> first.calls.size() == 1 && second.calls.size() == 1);
+        assertTrue(first.calls.get(0).record().startsWith("{\"device\":\"probe\",\"sequence\":1,"));
+        assertTrue(second.calls.get(0).record().startsWith("{\"device\":\"second\",\"sequence\":1,"));
+        await("RecordDeliveredCount on both", () -> Unsigned.ulong(1).equals(fixture.value("RecordDeliveredCount"))
+                && Unsigned.ulong(1).equals(valueOf(other, "RecordDeliveredCount")));
+        assertEquals(1, first.calls.size());
+        assertEquals(1, second.calls.size());
+    }
+
+    @Test
+    void deviceWithoutHandlerFunctionProducesNoRecordsAndCountsNothing() throws Exception {
+        FakeHandler unused = new FakeHandler();
+        FakeHandler control = new FakeHandler();
+        fixture = new SNMPDeviceFixture("", unused);
+        // a configured Device on the same port shows when the Notification has been fully handled
+        SNMPDevice configured = fixture.addDevice("configured", FUNCTION, control);
+        await("Listening", () -> "Listening".equals(fixture.value("Status"))
+                && "Listening".equals(valueOf(configured, "Status")));
+
+        sendV2cTrap(fixture.trapPort, 1);
+
+        await("control handler called", () -> control.calls.size() == 1);
+        await("AcceptedCount 1", () -> Unsigned.ulong(1).equals(fixture.value("AcceptedCount")));
+        assertTrue(((String) fixture.value("Last/Json")).startsWith("{\"sequence\":1,"));
+        assertEquals(0, unused.calls.size());
+        assertEquals(Unsigned.ulong(0), fixture.value("RecordDeliveredCount"));
+    }
+
+    private record Call(String project, String function, String record, String thread) {
+    }
+
+    /** Records every call; can hold the first call until released, and tracks concurrent calls. */
+    private static final class FakeHandler implements RecordHandlerInvoker {
+        final List<Call> calls = new CopyOnWriteArrayList<>();
+        final AtomicInteger maxInFlight = new AtomicInteger();
+        private final AtomicInteger inFlight = new AtomicInteger();
+        private volatile CountDownLatch gate;
+
+        void holdFirstCall() {
+            gate = new CountDownLatch(1);
+        }
+
+        void release() {
+            gate.countDown();
+        }
+
+        @Override
+        public Result invoke(String project, String function, String record) {
+            maxInFlight.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
+            try {
+                CountDownLatch current = gate;
+                if (current != null && !current.await(15, TimeUnit.SECONDS)) {
+                    throw new AssertionError("first call was never released");
+                }
+                Thread.sleep(5);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            } finally {
+                inFlight.decrementAndGet();
+            }
+            calls.add(new Call(project, function, record, Thread.currentThread().getName()));
+            return Result.SUCCESS;
+        }
+    }
+
+    private static Object valueOf(SNMPDevice device, String trapsPath) {
+        return SNMPDeviceFixture.read(device, trapsPath).getValue().getValue();
+    }
+
+    private static long sequenceOf(String record) {
+        Matcher matcher = SEQUENCE.matcher(record);
+        assertTrue(matcher.find(), record);
+        return Long.parseLong(matcher.group(1));
+    }
+
+    private static void sendV2cTrap(int port, int value) throws Exception {
+        PDU pdu = new PDU();
+        pdu.setType(PDU.TRAP);
+        pdu.add(new VariableBinding(SnmpConstants.sysUpTime, new TimeTicks(900)));
+        pdu.add(new VariableBinding(SnmpConstants.snmpTrapOID, new OID("1.3.6.1.6.3.1.1.5.3")));
+        pdu.add(new VariableBinding(new OID("1.3.6.1.2.1.2.2.1.1.3"), new Integer32(value)));
+        try (Snmp snmp = new Snmp(new DefaultUdpTransportMapping())) {
+            snmp.listen();
+            CommunityTarget<org.snmp4j.smi.Address> target = new CommunityTarget<>();
+            target.setAddress(GenericAddress.parse("udp:127.0.0.1/" + port));
+            target.setCommunity(new OctetString("public"));
+            target.setVersion(SnmpConstants.version2c);
+            snmp.send(pdu, target);
+        }
+    }
+
+    private static void await(String what, BooleanSupplier condition) throws Exception {
+        long deadline = System.nanoTime() + 15_000_000_000L;
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("timed out waiting for " + what);
+            }
+            Thread.sleep(25);
+        }
+    }
+}

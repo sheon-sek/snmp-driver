@@ -27,7 +27,7 @@ import org.snmp4j.transport.DefaultUdpTransportMapping;
 class SNMPDeviceTrapNodesTest {
     private static final List<String> COUNTERS = List.of("ReceivedCount", "AcceptedCount", "DroppedRateLimitCount",
             "DroppedQueueFullCount", "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount",
-            "ListenerUnmatchedCount", "ListenerMultiMatchCount");
+            "ListenerUnmatchedCount", "ListenerMultiMatchCount", "RecordDeliveredCount");
     private static final List<String> LAST = List.of("Sequence", "ReceivedTime", "PduType", "Version", "TrapOid",
             "Source", "AgentAddress", "AgentUpTime", "Varbinds", "Json");
 

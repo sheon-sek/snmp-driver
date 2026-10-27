@@ -70,8 +70,19 @@ public record SNMPDeviceConfig(
         @FormField(FormFieldType.TEXT)
         @DefaultValue("") String trapSourceAllowlist,
         @FormCategory("TRAP") @Label("Trap Rate Limit per Second* (1-10000)") @FormField(FormFieldType.NUMBER)
-        @DefaultValue("100") @Required int trapRateLimitPerSecond
+        @DefaultValue("100") @Required int trapRateLimitPerSecond,
+        @FormCategory("TRAP") @Label("Record Handler Project (project whose Script Library holds the function)")
+        @FormField(FormFieldType.TEXT)
+        @DefaultValue("") String recordHandlerProject,
+        @FormCategory("TRAP")
+        @Label("Record Handler Function (e.g. snmp.handlers.onNotification; called once per accepted Notification; empty disables)")
+        @FormField(FormFieldType.TEXT)
+        @DefaultValue("") String recordHandlerFunction
 ) {
+    /** Dotted Script Library path: at least "module.function", each part a Python identifier. */
+    private static final java.util.regex.Pattern RECORD_HANDLER_FUNCTION =
+            java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+");
+
     public enum Version { V1, V2C, V3 }
     public enum IpFamily { AUTO, IPV4, IPV6 }
     public enum SecurityLevel { NO_AUTH_NO_PRIV, AUTH_NO_PRIV, AUTH_PRIV }
@@ -86,8 +97,14 @@ public record SNMPDeviceConfig(
                 SecurityLevel.AUTH_PRIV, AuthProtocol.SHA256, null,
                 PrivacyProtocol.AES128, null, "", AccessMode.READ_ONLY,
                 2_000L, 1, 25, 1_200, 2,
-                false, "0.0.0.0", 162, TrapSecurity.COMMUNITY, null, "", true, "", 100
+                false, "0.0.0.0", 162, TrapSecurity.COMMUNITY, null, "", true, "", 100,
+                "", ""
         );
+    }
+
+    /** True for a dotted function path such as {@code snmp.handlers.onNotification}; surrounding blanks allowed. */
+    public static boolean isValidRecordHandlerFunction(String function) {
+        return function != null && RECORD_HANDLER_FUNCTION.matcher(function.strip()).matches();
     }
 
     /**
