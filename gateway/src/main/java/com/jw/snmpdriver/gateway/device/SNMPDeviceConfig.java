@@ -77,8 +77,15 @@ public record SNMPDeviceConfig(
         @FormCategory("TRAP")
         @Label("Record Handler Function (e.g. snmp.handlers.onNotification; called once per accepted Notification; empty disables)")
         @FormField(FormFieldType.TEXT)
-        @DefaultValue("") String recordHandlerFunction
+        @DefaultValue("") String recordHandlerFunction,
+        @FormCategory("TRAP")
+        @Label("Record Queue Capacity* (100-100000; Records waiting for the function; when full, new Records are dropped)")
+        @FormField(FormFieldType.NUMBER)
+        @DefaultValue("10000") @Required int recordQueueCapacity
 ) {
+    public static final int MIN_RECORD_QUEUE_CAPACITY = 100;
+    public static final int MAX_RECORD_QUEUE_CAPACITY = 100_000;
+
     /** Dotted Script Library path: at least "module.function", each part a Python identifier. */
     private static final java.util.regex.Pattern RECORD_HANDLER_FUNCTION =
             java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+");
@@ -98,7 +105,7 @@ public record SNMPDeviceConfig(
                 PrivacyProtocol.AES128, null, "", AccessMode.READ_ONLY,
                 2_000L, 1, 25, 1_200, 2,
                 false, "0.0.0.0", 162, TrapSecurity.COMMUNITY, null, "", true, "", 100,
-                "", ""
+                "", "", 10_000
         );
     }
 

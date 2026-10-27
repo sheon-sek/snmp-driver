@@ -116,6 +116,66 @@ class SNMPDeviceRecordDeliveryTest {
         assertEquals(Unsigned.ulong(0), fixture.value("RecordDeliveredCount"));
     }
 
+    @Test
+    void fullQueueDropsNewlyArrivedRecordsAndKeepsTheQueuedOnes() throws Exception {
+        FakeHandler handler = new FakeHandler();
+        handler.holdFirstCall();
+        fixture = new SNMPDeviceFixture(FUNCTION, handler, 3);
+        await("Listening", () -> "Listening".equals(fixture.value("Status")));
+
+        sendV2cTrap(fixture.trapPort, 1);
+        handler.awaitFirstCallStarted();
+        for (int i = 2; i <= 10; i++) {
+            sendV2cTrap(fixture.trapPort, i);
+        }
+        // Record 1 is in the handler, 2-4 fill the queue, 5-10 find it full
+        await("6 dropped", () -> Unsigned.ulong(6).equals(fixture.value("RecordDroppedCount")));
+        assertEquals(Unsigned.ulong(10), fixture.value("AcceptedCount"));
+        assertEquals(Unsigned.ulong(4), fixture.value("RecordQueueDepth"));
+        assertEquals(Unsigned.ulong(0), fixture.value("RecordDeliveredCount"));
+        assertTrue(((String) fixture.value("LastError")).contains("Record"), (String) fixture.value("LastError"));
+        assertReconciled();
+
+        handler.release();
+        await("4 delivered", () -> Unsigned.ulong(4).equals(fixture.value("RecordDeliveredCount"))
+                && Unsigned.ulong(0).equals(fixture.value("RecordQueueDepth")));
+        assertEquals(List.of(1L, 2L, 3L, 4L), handler.sequences());
+        assertEquals(Unsigned.ulong(6), fixture.value("RecordDroppedCount"));
+        assertReconciled();
+    }
+
+    @Test
+    void stoppingTheDeviceCountsQueuedRecordsAsDroppedAndLetsTheRunningCallFinish() throws Exception {
+        FakeHandler handler = new FakeHandler();
+        handler.holdFirstCall();
+        fixture = new SNMPDeviceFixture(FUNCTION, handler);
+        await("Listening", () -> "Listening".equals(fixture.value("Status")));
+
+        sendV2cTrap(fixture.trapPort, 1);
+        handler.awaitFirstCallStarted();
+        for (int i = 2; i <= 5; i++) {
+            sendV2cTrap(fixture.trapPort, i);
+        }
+        await("AcceptedCount 5", () -> Unsigned.ulong(5).equals(fixture.value("AcceptedCount")));
+
+        fixture.stopDevice();
+        // the counters are published once more on stop
+        assertEquals(Unsigned.ulong(4), fixture.value("RecordDroppedCount"));
+        handler.release();
+        await("running call finished", () -> handler.calls.size() == 1);
+        Thread.sleep(200);
+        assertEquals(List.of(1L), handler.sequences(), "queued Records are never delivered after stop");
+    }
+
+    private void assertReconciled() {
+        long accepted = ((Number) fixture.value("AcceptedCount")).longValue();
+        long delivered = ((Number) fixture.value("RecordDeliveredCount")).longValue();
+        long dropped = ((Number) fixture.value("RecordDroppedCount")).longValue();
+        long depth = ((Number) fixture.value("RecordQueueDepth")).longValue();
+        assertEquals(accepted, delivered + dropped + depth,
+                "AcceptedCount = Delivered + Dropped + QueueDepth (HandlerError is 0 here)");
+    }
+
     private record Call(String project, String function, String record, String thread) {
     }
 
@@ -124,7 +184,18 @@ class SNMPDeviceRecordDeliveryTest {
         final List<Call> calls = new CopyOnWriteArrayList<>();
         final AtomicInteger maxInFlight = new AtomicInteger();
         private final AtomicInteger inFlight = new AtomicInteger();
+        private final CountDownLatch firstCallStarted = new CountDownLatch(1);
         private volatile CountDownLatch gate;
+
+        void awaitFirstCallStarted() throws InterruptedException {
+            assertTrue(firstCallStarted.await(15, TimeUnit.SECONDS), "handler was never called");
+        }
+
+        List<Long> sequences() {
+            List<Long> sequences = new ArrayList<>();
+            calls.forEach(call -> sequences.add(sequenceOf(call.record())));
+            return sequences;
+        }
 
         void holdFirstCall() {
             gate = new CountDownLatch(1);
@@ -137,6 +208,7 @@ class SNMPDeviceRecordDeliveryTest {
         @Override
         public Result invoke(String project, String function, String record) {
             maxInFlight.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
+            firstCallStarted.countDown();
             try {
                 CountDownLatch current = gate;
                 if (current != null && !current.await(15, TimeUnit.SECONDS)) {

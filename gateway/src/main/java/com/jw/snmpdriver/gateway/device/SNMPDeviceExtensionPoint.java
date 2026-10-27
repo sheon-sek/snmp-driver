@@ -46,7 +46,7 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
             JsonObject defaults = encode(SNMPDeviceConfig.defaults()).getAsJsonObject();
             for (RecordComponent component : SNMPDeviceConfig.class.getRecordComponents()) {
                 String name = component.getName();
-                boolean defaulted = name.startsWith("trap") || name.startsWith("recordHandler");
+                boolean defaulted = name.startsWith("trap") || name.startsWith("record");
                 if (defaulted && !object.has(name) && defaults.has(name)) {
                     object.add(name, defaults.get(name));
                 }
@@ -165,6 +165,9 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
                         || SNMPDeviceConfig.isValidRecordHandlerFunction(function),
                 "recordHandlerFunction",
                 "Record handler function must be a dotted Script Library path such as snmp.handlers.onNotification.");
+        errors.checkField(config.recordQueueCapacity() >= SNMPDeviceConfig.MIN_RECORD_QUEUE_CAPACITY
+                        && config.recordQueueCapacity() <= SNMPDeviceConfig.MAX_RECORD_QUEUE_CAPACITY,
+                "recordQueueCapacity", "Record queue capacity must be 100-100000.");
 
         if (!config.trapEnabled()) {
             return;

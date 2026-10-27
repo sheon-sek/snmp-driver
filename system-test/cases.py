@@ -590,14 +590,99 @@ def prepare_records():
     clear_records()
 
 
-def record_device(name):
+def record_device(name, **over):
     return v2c_device(name, recordHandlerProject="st-records",
-                      recordHandlerFunction="snmp.handlers.onNotification")
+                      recordHandlerFunction="snmp.handlers.onNotification", **over)
 
 
-def delivered(dev, count):
+def delivered(dev, count, timeout=15):
     wait_for(lambda: read(dev, "RecordDeliveredCount")["RecordDeliveredCount"] == count,
-             15, what=f"{dev} delivered {count}")
+             timeout, what=f"{dev} delivered {count}")
+
+
+RECORD_COUNTS = ("AcceptedCount", "RecordDeliveredCount", "RecordDroppedCount", "RecordQueueDepth")
+
+
+def record_counts(dev):
+    c = read(dev, *RECORD_COUNTS)
+    # HandlerError is added by #50; until then a successful handler leaves it out of the reconciliation
+    check(c["AcceptedCount"] == c["RecordDeliveredCount"] + c["RecordDroppedCount"] + c["RecordQueueDepth"],
+          f"reconciliation broken: {c}")
+    return c
+
+
+def v2c_trap_pdu():
+    """Bytes of one v2c Trap; capture it before any Record Device exists (the capture send is unmatched)."""
+    out = send("snmptrap -d -v 2c -c " + COMM + " {gw} '' 1.3.6.1.6.3.1.1.5.3 1.3.6.1.2.1.2.2.1.1.1 i 1",
+               check=False)
+    sent = [h for k, h in hex_blocks(out.stdout + out.stderr) if k == "Sending"]
+    check(sent, "no Sending block in snmptrap -d output:\n" + (out.stdout + out.stderr)[-800:])
+    return sent[-1]
+
+
+def blast(hexpdu, count, gap_ms):
+    """Send the same Trap `count` times, `gap_ms` apart, from the systest container; returns elapsed seconds."""
+    py = ("import socket,time;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);"
+          f"d=bytes.fromhex('{hexpdu}');t=time.time()\n"
+          f"for _ in range({count}):\n"
+          f"  s.sendto(d,('gateway',{TRAP_PORT}));time.sleep({gap_ms / 1000.0})\n"
+          "print(time.time()-t)")
+    return float(sx(f'python -c "{py}"', timeout=120).stdout.strip().splitlines()[-1])
+
+
+@case("record:thousand-fast")
+def record_thousand_fast():
+    pdu = v2c_trap_pdu()
+    prepare_records()
+    dev = record_device("st-record-burst", trapRateLimitPerSecond=10000)
+    try:
+        elapsed = blast(pdu, 1000, 5)
+        check(elapsed / 1000 <= 0.010, f"sender too slow: {elapsed:.2f}s for 1000 Traps")
+        wait_for(lambda: read(dev, "AcceptedCount")["AcceptedCount"] == 1000, 30, what=f"{dev} accepted 1000")
+        delivered(dev, 1000, timeout=120)
+        records = read_records()
+        check(len(records) == 1000, f"handler called {len(records)} times")
+        check([r["sequence"] for r in records] == list(range(1, 1001)), "sequences not consecutive and in order")
+        check(all(r["device"] == dev for r in records), "device attribution")
+        c = record_counts(dev)
+        check(c["RecordDroppedCount"] == 0 and c["RecordQueueDepth"] == 0, f"counts {c}")
+        return f"1000 Traps in {elapsed:.1f}s -> 1000 calls, sequence 1..1000 in order; {c}"
+    finally:
+        delete_device(dev)
+        clear_records()
+
+
+@case("record:overflow-drops-newest")
+def record_overflow():
+    pdu = v2c_trap_pdu()
+    prepare_records()
+    dev = record_device("st-record-overflow", trapRateLimitPerSecond=10000, recordQueueCapacity=100)
+    try:
+        set_record_handler("slow", delay_millis=8000)
+        blast(pdu, 1, 0)
+        # Record 1 is now inside the slow call; 2..101 fill the queue, 102..150 find it full
+        wait_for(lambda: read(dev, "RecordQueueDepth")["RecordQueueDepth"] == 1, 10, what="first call running")
+        time.sleep(0.5)
+        blast(pdu, 149, 5)
+        wait_for(lambda: read(dev, "RecordDroppedCount")["RecordDroppedCount"] == 49, 10, what="49 dropped")
+        c = record_counts(dev)
+        check(c["AcceptedCount"] == 150 and c["RecordQueueDepth"] == 101 and c["RecordDeliveredCount"] == 0,
+              f"while full: {c}")
+        error = read(dev, "LastError")["LastError"]
+        check("Record 队列已满" in error and "100" in error, f"LastError {error!r}")
+        # calls after the slow one read the control file again and run at full speed
+        set_record_handler("normal")
+        delivered(dev, 101, timeout=60)
+        records = read_records()
+        check([r["sequence"] for r in records] == list(range(1, 102)),
+              f"kept Records are not the first 101: {[r['sequence'] for r in records]}")
+        c = record_counts(dev)
+        check(c["RecordDroppedCount"] == 49 and c["RecordQueueDepth"] == 0, f"after drain: {c}")
+        return f"capacity 100 + slow handler: kept 1..101, dropped 49 newest; {c}"
+    finally:
+        set_record_handler("normal")
+        delete_device(dev)
+        clear_records()
 
 
 @case("record:ten-at-500ms")

@@ -81,7 +81,8 @@ class SNMPDeviceWriteTest {
         return new SNMPDeviceConfig("127.0.0.1", port, d.ipFamily(), SNMPDeviceConfig.Version.V2C,
                 READ, WRITE, "", d.securityLevel(), d.authProtocol(), null, d.privacyProtocol(), null, "",
                 accessMode, 1000, 1, d.maxOidsPerRequest(), d.maxRequestBytes(), d.maxInflightPerDevice(),
-                false, d.trapBindAddress(), d.trapPort(), d.trapSecurity(), null, "", true, "", 100, "", "");
+                false, d.trapBindAddress(), d.trapPort(), d.trapSecurity(), null, "", true, "", 100, "", "",
+                d.recordQueueCapacity());
     }
 
     /** A v2c agent on loopback: GET with st-public, SET with st-private, one Integer32 starting at 5. */

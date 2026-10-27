@@ -46,6 +46,14 @@ class TrapStateTest {
     }
 
     @Test
+    void recordJsonPutsDeviceFirstAndStaysValidForAnEmptySnapshot() throws Exception {
+        assertEquals("{\"device\":\"d\\\"1\"}", TrapState.recordJson("d\"1", new TrapState().last()));
+
+        TrapState.Snapshot snapshot = new TrapState().record(notification(varbinds(), false));
+        assertEquals("{\"device\":\"d\"," + snapshot.json().substring(1), TrapState.recordJson("d", snapshot));
+    }
+
+    @Test
     void recordIncrementsSequenceAndRendersJson() throws Exception {
         TrapState state = new TrapState();
         state.record(notification(varbinds(), false));

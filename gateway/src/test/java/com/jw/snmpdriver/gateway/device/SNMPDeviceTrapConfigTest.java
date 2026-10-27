@@ -53,6 +53,24 @@ class SNMPDeviceTrapConfigTest {
         assertEquals(100, config.trapRateLimitPerSecond());
         assertEquals("", config.recordHandlerProject());
         assertEquals("", config.recordHandlerFunction());
+        assertEquals(10_000, config.recordQueueCapacity());
+    }
+
+    @Test
+    void recordQueueCapacityDefaultsToTenThousand() {
+        assertEquals(10_000, SNMPDeviceConfig.defaults().recordQueueCapacity());
+    }
+
+    @Test
+    void rejectsRecordQueueCapacityOutsideOneHundredToOneHundredThousand() throws Exception {
+        for (int capacity : new int[] {0, 99, -1, 100_001}) {
+            assertFieldError("recordQueueCapacity", decode(Map.of("recordQueueCapacity", capacity)));
+        }
+        for (int capacity : new int[] {100, 10_000, 100_000}) {
+            SNMPDeviceConfig config = decode(Map.of("recordQueueCapacity", capacity));
+            assertEquals(capacity, config.recordQueueCapacity());
+            assertEquals(Map.of(), fieldErrors(config), String.valueOf(capacity));
+        }
     }
 
     @Test
