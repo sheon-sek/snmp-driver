@@ -3,7 +3,7 @@
 
 Runs on the WSL host from the repo root, after `python3 system-test/st.py setup`:
 
-    python3 system-test/storm.py run [--baseline S] [--storm S] [--burst S] [--flood S] [--recovery S]
+    python3 system-test/storm.py run [--baseline S] [--storm S] [--burst S] [--flood S] [--recovery S] [--handler 1]
     python3 system-test/storm.py analyze <out/storm-...>     # re-run the analysis of a finished run
     python3 system-test/storm.py cleanup                     # delete st-* devices, drop the IP aliases
 
@@ -13,6 +13,10 @@ Traps, 45-49 take Informs (10/s each). Phases: baseline (no Notifications), stor
 (10000 trap/s), flood (120000 trap/s, beyond §6.4, to fill the shared queue), recovery. Everything is observed from outside the module: OPC UA values/timestamps and Traps/* counters,
 a pcap of the SNMP GETs on the agent side, the Gateway's /proc/net/snmp UDP counters, and the heap figure
 from the Gateway REST overview.
+
+--handler 1 (#51) gives every Device the st-records Record Handler (system-test/RECORDS.md), --handler 2 its
+no-op function (no sink file I/O, sinkLines stays 0); after the last phase the run waits for all Record queues to drain and checks
+AcceptedCount = RecordDeliveredCount + RecordHandlerErrorCount + RecordDroppedCount + RecordQueueDepth.
 """
 import bisect
 import json
@@ -42,7 +46,10 @@ OIDS = [
 LATENCY_OID = OIDS[0]  # sysUpTime changes every poll, so every poll produces a data change
 COUNTERS = ["ReceivedCount", "AcceptedCount", "DroppedRateLimitCount", "DroppedQueueFullCount",
             "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount", "ListenerUnmatchedCount",
-            "ListenerMultiMatchCount"]
+            "ListenerMultiMatchCount", "RecordDeliveredCount", "RecordHandlerErrorCount", "RecordDroppedCount",
+            "RecordQueueDepth"]
+RECORD_COUNTS = ["RecordDeliveredCount", "RecordHandlerErrorCount", "RecordDroppedCount"]
+HANDLERS = {1: st.RECORD_FUNCTION, 2: "snmp.handlers.onNotificationNoop"}
 
 
 def name(i):
@@ -65,13 +72,15 @@ def drop_aliases():
     st.sx(script + "; true")
 
 
-def create_devices():
+def create_devices(handler=0):
     st.delete_all_devices()
     enc = st.secret(COMM)
     res = []
     for i in range(DEVICES):
         s = dict(st.DEFAULTS, host=ip(i), version="V2C", trapEnabled=True, trapPort=st.TRAP_PORT,
                  trapRateLimitPerSecond=10_000)
+        if handler:
+            s.update(recordHandlerProject=st.RECORD_PROJECT, recordHandlerFunction=HANDLERS[handler])
         s["readCommunity"] = enc
         res.append({"name": name(i), "enabled": True,
                     "config": {"profile": {"type": st.DEVICE_TYPE}, "settings": s}})
@@ -147,15 +156,19 @@ def send_phase(outdir, phase, seconds, trap_rate, inform_rate, procs=1):
     return res
 
 
-def run(baseline=180, storm=300, burst=30, flood=10, recovery=60, inform_rate=10):
+def run(baseline=180, storm=300, burst=30, flood=10, recovery=60, inform_rate=10, handler=0):
     gi = st.gateway_info()
     outdir = st.OUT / time.strftime("storm-%Y%m%dT%H%M%S")
     outdir.mkdir(parents=True)
     rel = f"/work/out/{outdir.name}"
     st.start_agent()
     add_aliases()
+    if handler:
+        st.import_record_project(overwrite=True)
+        st.set_record_handler("normal")
+        st.clear_records()
     print("creating 50 Devices ...", flush=True)
-    create_devices()
+    create_devices(handler)
     total = 20 + baseline + storm + burst + flood + recovery + 60
     nids = [f"ns=1;s=[{name(i)}]{oid}" for i in range(DEVICES) for oid in OIDS]
     (outdir / "nodes.txt").write_text("\n".join(nids))
@@ -196,10 +209,18 @@ def run(baseline=180, storm=300, burst=30, flood=10, recovery=60, inform_rate=10
     st.sx("pkill tcpdump; true")
     sampler.stop.set()
     sampler.join()
+    drained = None
+    if handler:
+        st.wait_for(lambda: sum(c["RecordQueueDepth"] for c in read_counters().values()) == 0, 1800, 5,
+                    "Record queues drained")
+        time.sleep(2)  # counters are flushed once per second
+        snaps["drained"] = read_counters()
+        drained = {"t": time.time(), "sinkLines": int(st.run(
+            ["docker", "exec", gi["container"], "sh", "-c", f"wc -l < {st.RECORD_FILE}"]).stdout.split()[0])}
     diag = read_diagnostics()
     (outdir / "run.json").write_text(json.dumps({"phases": phases, "counters": snaps, "udp": udp,
                                                  "diagnostics": diag, "devices": DEVICES, "oids": len(OIDS),
-                                                 "trapDevices": TRAP_DEVICES}, indent=1))
+                                                 "trapDevices": TRAP_DEVICES, "drained": drained}, indent=1))
     analyze(outdir)
 
 
@@ -332,7 +353,9 @@ def analyze(outdir):
         ph = res["phase"]
         if ph not in counters:
             continue
-        d = {dev: {c: counters[ph][dev][c] - counters[prev][dev][c] for c in COUNTERS} for dev in counters[ph]}
+        # .get: runs recorded before #51 have no Record counters
+        d = {dev: {c: counters[ph][dev].get(c, 0) - counters[prev][dev].get(c, 0) for c in COUNTERS}
+             for dev in counters[ph]}
 
         def total(devs, c):
             return sum(d[x][c] for x in devs)
@@ -362,6 +385,22 @@ def analyze(outdir):
         a["informNotAckedCovered"] = a["informsNotAcked"] >= a["informDropped"]
         prev = ph
 
+    records = None
+    if meta.get("drained"):
+        end = counters["drained"]
+        per_dev = {dev: v["AcceptedCount"] - sum(v[c] for c in RECORD_COUNTS) - v["RecordQueueDepth"]
+                   for dev, v in end.items()}
+        records = {"accepted": sum(v["AcceptedCount"] for v in end.values()),
+                   **{c: sum(v[c] for v in end.values()) for c in RECORD_COUNTS + ["RecordQueueDepth"]},
+                   "unreconciledDevices": {dev: n for dev, n in per_dev.items() if n},
+                   "sinkLines": meta["drained"]["sinkLines"],
+                   "queueDepthAfterEachPhase": {ph: sum(v["RecordQueueDepth"] for v in counters[ph].values())
+                                                for ph in counters if ph not in ("before", "drained")},
+                   "drainedSecondsAfterLastSend": round(
+                       meta["drained"]["t"] - max(p["end"] for p in meta["phases"] if "trapsSent" in p), 1)}
+        records["reconciles"] = not records["unreconciledDevices"] and records["accepted"] == sum(
+            records[c] for c in RECORD_COUNTS + ["RecordQueueDepth"])
+
     heap, heap_by_phase = [], {}
     samples = [json.loads(ln) for ln in (outdir / "samples.jsonl").read_text().splitlines()]
     for row in samples:
@@ -380,7 +419,7 @@ def analyze(outdir):
               "cyclesPerDevicePerSecond": {ph: round(len(interval[ph]) / DEVICES / (b - a), 3)
                                            for ph, a, b in phases},
               "getRequests": requests, "getRetransmissions": retries, "badValues": bad,
-              "accounting": acct,
+              "accounting": acct, "records": records,
               "heapMiB": {ph: {"min": min(v), "max": max(v), "mean": round(statistics.mean(v))}
                           for ph, v in heap_by_phase.items()},
               "heapMaxMiB": round(next(r["heapMax"] for r in samples if "heapMax" in r) / 2**20),

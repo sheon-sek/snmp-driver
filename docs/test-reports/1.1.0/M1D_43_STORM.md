@@ -115,3 +115,94 @@ python3 system-test/storm.py cleanup     # 删除 st-* 设备、撤掉 IP 别名
 ```
 
 全程约 13 分钟，结束时打印 `summary.json`。
+
+## #51 开启处理函数的重跑（2026-10-27）
+
+### 结论
+
+| 阈值 | 结果 | 数据 |
+|---|---|---|
+| Record 对账式成立（队列排空后） | **通过** | 两组均 `AcceptedCount = RecordDeliveredCount + RecordHandlerErrorCount + RecordDroppedCount + RecordQueueDepth`，50 台设备逐台差值 0；sink 组 612 947 = 612 947 + 0 + 0 + 0，sink 文件行数 612 947 |
+| 2000 trap/s × 5 min：轮询 p95 增幅 < 20% | **未通过** | sink 处理函数 0.969 → 2.720 ms（+180.7%）；no-op 处理函数 1.128 → 4.080 ms（+261.7%） |
+| 不新增轮询超时 | **通过** | GET 重传 0，Bad 值 0，熔断器全部 CLOSED |
+| Trap 全部进入模块 | **未通过（新观察）** | 两组各有约 2 000 个包（0.33%）在 Gateway 内核 UDP 接收缓冲溢出，未到模块，其中 52 / 47 个 Inform 未 ACK；同一构建不配处理函数的对照组为 0 |
+
+开启处理函数后，Record 不丢、全部投递并对上账，但 2000 trap/s 持续负载下轮询 p95 大幅超过 20% 阈值，并出现内核 UDP 丢包。同一构建、同一时段不配处理函数的对照组 p95 未上升、无丢包，因此退化来自 Record 的调用路径本身，不是主机噪声。是否接受或优化由负责人决定；本票未改模块代码。
+
+### 环境与构建
+
+硬件与软件同上表：Intel Core Ultra 7 165U（14 逻辑核，笔记本低功耗 U 系列）、31 GiB 内存，Windows 11 + WSL2 Ubuntu 24.04（内核 6.18.33.2-microsoft-standard-WSL2），Docker 29.8.1，igdev Gateway Ignition 8.3.10、最大堆 2048 MiB，固定 MAC `02:42:ac:12:00:62`。发包器与 Gateway 在同一台笔记本上。
+
+模块：`feat/51`（基于 `m1d/release` 707e272，模块源码与之相同）复制到忽略的 `.scratch` 后应用本地 License bypass patch，构建为 `com.jw.snmpdriver-1.1.0-m51-dev.unsigned.modl` 安装；未签名，仅供开发验收，不提交。三组在同一次安装上连续运行，原始数据在 `system-test/out/storm-20261027T185325/`（sink）、`storm-20261027T190526/`（no-op）、`storm-20261027T191657/`（对照），不入库。
+
+### 方法
+
+负载、测量方法与上文相同，只跑基线 180 s → storm 300 s @ 2000 trap/s（另 Inform 10/s × 5 台）→ 恢复 60 s。`storm.py run --handler N` 给 50 台设备都配置 `st-records` 项目（`system-test/RECORDS.md`）的处理函数，结束后等全部 `RecordQueueDepth` 归零再读计数对账：
+
+- `--handler 1`：`snmp.handlers.onNotification`（normal 模式），每条读 control 文件、`jsonDecode`、取全局锁、打开并追加写 sink 文件；
+- `--handler 2`：`snmp.handlers.onNotificationNoop`，只返回版本标签，用来测量驱动自身的逐条调用开销；
+- 对照：不加 `--handler`，同一构建。
+
+### 轮询延迟（ms）
+
+| 组 | 阶段 | 样本 | p50 | p95 | p99 | max | p95 增幅 |
+|---|---|---|---|---|---|---|---|
+| sink 处理函数 | 基线 | 9 000 | 0.450 | 0.969 | 1.382 | 4.438 | — |
+| | storm | 14 935 | 0.635 | 2.720 | 5.246 | 95.450 | +180.7% |
+| | 恢复（积压可能仍在处理） | 2 992 | 0.645 | 2.079 | 4.279 | 102.187 | +114.6% |
+| no-op 处理函数 | 基线 | 9 000 | 0.454 | 1.128 | 1.698 | 25.414 | — |
+| | storm | 14 905 | 0.631 | 4.080 | 7.426 | 101.709 | +261.7% |
+| | 恢复 | 3 000 | 0.593 | 1.605 | 2.792 | 4.084 | +42.3% |
+| 对照（无处理函数） | 基线 | 9 000 | 0.446 | 1.233 | 1.657 | 2.756 | — |
+| | storm | 15 000 | 0.371 | 0.975 | 1.420 | 7.435 | −20.9% |
+| | 恢复 | 3 000 | 0.519 | 1.380 | 1.790 | 6.885 | +11.9% |
+
+周期间隔 p95：两组处理函数的 storm 阶段为 1043.6 / 1045.0 ms（p99 约 1082 ms，max 1164 / 1202 ms），对照组 1001.4 ms；每台设备每秒周期数 0.995 / 0.993（对照 0.999）。没有漏轮询意义上的超时，但轮询节奏出现最长约 200 ms 的推迟。
+
+### Record 对账与吞吐
+
+| 组 | Accepted | Delivered | HandlerError | Dropped | QueueDepth（排空后） | storm 结束 4 s 后积压 | sink 行数 |
+|---|---|---|---|---|---|---|---|
+| sink 处理函数 | 612 947 | 612 947 | 0 | 0 | 0 | 34 636 | 612 947 |
+| no-op 处理函数 | 612 986 | 612 986 | 0 | 0 | 0 | 0 | 0（不写 sink） |
+
+sink 组的处理速度低于到达速度（约 2 045 条/s）：storm 期间约 1 900 条/s，结束时积压 34 636 条（平均每台约 690 条，远低于每台容量 10 000，没有 Dropped）；最后一个包发出后 124 s 时确认全部排空（含 60 s 恢复阶段和收尾，排空时刻未精确测量）。no-op 组 4 个调用线程能跟上到达速度，没有积压。
+
+### Trap 接收与 Inform
+
+| 组 | 发送（Trap + Inform） | Received = Accepted | 没到模块 | Gateway `UdpRcvbufErrors` | Inform ACK / 未 ACK |
+|---|---|---|---|---|---|
+| sink 处理函数 | 599 999 + 14 999 | 612 947 | 2 051 | 2 051 | 14 947 / 52 |
+| no-op 处理函数 | 599 998 + 14 999 | 612 986 | 2 011 | 2 011 | 14 952 / 47 |
+| 对照 | 599 999 + 14 999 | 614 998 | 0 | 0 | 14 999 / 0 |
+
+进入模块的包都在设备计数里对上账（设备内差值 0），ACK 数等于 Inform Accepted；未 ACK 的 Inform 都是被内核丢弃、没到模块的包，发送方会重试。
+
+### Gateway CPU 与堆
+
+| 组 | storm 阶段 CPU 均值（占 14 核） | 约合核数 | storm 堆 MiB（最低/最高/平均） |
+|---|---|---|---|
+| sink 处理函数 | 23.2% | 3.2 | 335 / 1333 / 809 |
+| no-op 处理函数 | 19.8% | 2.8 | 419 / 1486 / 957 |
+| 对照 | 1.3% | 0.2 | 437 / 1409 / 921 |
+
+堆没有上升趋势，GC 后回落；三组都远低于 2048 MiB 上限。
+
+### 热点观察（未改代码）
+
+- no-op 函数几乎不做事，但 2 045 条/s 时 Gateway 多用约 2.6 个核，折合每条 Record 约 1.3 ms CPU，开销在驱动的调用路径上。`ScriptRecordHandlerInvoker` 为了让 Script Library 保存后下一条立即生效，每条 Record 都重新执行：`getManifests()` 查项目、`getProjectScriptManager()`、`createLocalsMap()`，以及用 `runCode("__snmp_record_handler__ = <function>")` 编译并执行一段 Python 源码来解析函数，最后 `runFunction`。其中每条一次的 Jython 源码编译最可疑；Gateway 镜像内没有 jcmd/jstack，本次没有取线程采样，未定量区分各步耗时。
+- 两组处理函数的轮询延迟 max 与周期间隔 max 都在约 100–200 ms，而对照组 max 只有 7 ms；内核 UDP 丢包也只在这两组出现。推测是 Record 调用路径占用 CPU 并产生大量短命对象，导致 Gateway 线程（含轮询回调和 Trap 接收）周期性停顿；这是推测，未验证。
+- 可选方向（交协调者/负责人决定，本票不改）：按项目缓存已解析的函数，在项目保存或 ScriptManager 变化时失效；或减少每条的 manifest 查询。现有热更新语义（下一条使用新代码）需要保持。
+
+### 复现
+
+```bash
+python3 system-test/storm.py run --baseline 180 --storm 300 --burst 0 --flood 0 --recovery 60 --handler 1
+python3 system-test/storm.py run --baseline 180 --storm 300 --burst 0 --flood 0 --recovery 60 --handler 2
+python3 system-test/storm.py run --baseline 180 --storm 300 --burst 0 --flood 0 --recovery 60
+python3 system-test/storm.py cleanup
+```
+
+`--handler` 会以覆盖方式重新导入 `st-records` 夹具、恢复 normal 模式并清空 sink。每组约 10–12 分钟。sink 组结束后 sink 文件约 61 万行，测试后必须清空（`st.clear_records()`）。
+
+本次结束后已删除全部 st-* 设备与 IP 别名，st-records 为 normal、sink 为空，Gateway ensure 与 OPC UA 连通正常，MAC 仍为 `02:42:ac:12:00:62`。

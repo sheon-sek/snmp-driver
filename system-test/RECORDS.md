@@ -47,6 +47,9 @@ st.import_record_project(overwrite=True, version="v1") # 恢复原版
 `/tmp` 文件不保证跨容器重建保留，测试必须自行初始化。
 正常 handler 返回版本标签；驱动可以忽略返回值。
 
+`snmp.handlers.onNotificationNoop(record)` 只返回版本标签，不读 control 文件、不写 sink。
+风暴测试（#51）用它测量驱动自身的逐条调用开销：`storm.py run --handler 2`；`--handler 1` 使用上面的正常 sink。
+
 SDK 实测由临时项目从普通 Java 线程调用上述函数完成，正常、异常、50 ms 慢调用和读/清空均已通过。
 本任务没有修改模块源码或安装 bypass，也没有执行 Trap 到 Record Delivery 的端到端用例；后者交由 #48/#50 集成测试。
 

@@ -8,7 +8,8 @@
 
 - `M1D_41_SYSTEM_TEST.md`：net-snmp 系统测试矩阵（含 Docker 端口映射源 IP、固定 MAC）
 - `M1D_42_UPGRADE_RESTORE_CLONE.md`：升级、备份恢复与克隆（含 `notInTimeWindow`）
-- `M1D_43_STORM.md`：风暴测试（参考值与硬件条件）
+- `M1D_43_STORM.md`：风暴测试（参考值与硬件条件；含开启处理函数的重跑，#51）
+- `M1D_48_RECORD_DELIVERY.md`、`M1D_49_RECORD_QUEUE.md`、`M1D_50_HANDLER_ERRORS.md`：逐条处理 Notification（Record Delivery）
 - `M1D_32_SET.md`：SNMP SET 写入与 Designer `Bad_GatewayCommOff`
 
 ## 0. 通用修改
@@ -17,9 +18,9 @@
 |---|---|
 | 封面 / 版本说明 | 版本改为 1.1.0 |
 | 功能概述 | 增加 Trap/Inform 接收（v1/v2c/v3），与 `docs/SNMP_DRIVER_FEATURE_LIST.md` 一致 |
-| “不支持的功能”一节 | 删除“Trap/Inform”；保留 MIB 导入/名称解析；新增“逐条 Trap 事件持久化（Event Streams / SQL）”“Gateway 级任意来源 Trap 接收”“冗余 Gateway”（见 §7） |
+| “不支持的功能”一节 | 删除“Trap/Inform”；保留 MIB 导入/名称解析；新增“模块内置的逐条 Trap 事件持久化（Event Streams / SQL）——需要时在处理函数中自行实现（见 §14）”“Gateway 级任意来源 Trap 接收”“冗余 Gateway”（见 §7） |
 | 认证/隐私协议列表 | 核对为：Auth MD5、SHA1、SHA224、SHA256、SHA384、SHA512；Privacy DES、AES128、AES192、AES256 |
-| 升级说明 | 1.0.0 的设备配置升级到 1.1.0 后无需修改即可加载；新增的 `trap*` 字段取默认值，`Trap Enabled` 默认关闭，轮询行为不变 |
+| 升级说明 | 1.0.0 的设备配置升级到 1.1.0 后无需修改即可加载；新增的 `trap*`、`recordHandler*`、`recordQueueCapacity` 字段取默认值，`Trap Enabled` 默认关闭、不配置处理函数，轮询行为不变 |
 
 ## 1. 新增章节：Trap/Inform 配置
 
@@ -46,7 +47,7 @@ Device 配置新增 `TRAP` 分类，字段如下（表单 Label 以 Gateway 界�
 
 ## 2. 新增章节：Traps 节点与 TRAP.* 路径
 
-`[Device]/Traps/` 节点：`Status`（`Disabled` / `Listening` / `Degraded` / `Unlicensed`）、`LastError`、`ListenerEndpoint`、`LocalEngineId`、`ReceivedCount`、`AcceptedCount`、`DroppedRateLimitCount`、`DroppedQueueFullCount`、`DroppedUnlicensedCount`、`AuthFailureCount`、`DuplicateInformCount`、`OverflowCount`、`ListenerUnmatchedCount`、`ListenerMultiMatchCount`。
+`[Device]/Traps/` 节点：`Status`（`Disabled` / `Listening` / `Degraded` / `Unlicensed`）、`LastError`、`ListenerEndpoint`、`LocalEngineId`、`ReceivedCount`、`AcceptedCount`、`DroppedRateLimitCount`、`DroppedQueueFullCount`、`DroppedUnlicensedCount`、`AuthFailureCount`、`DuplicateInformCount`、`OverflowCount`、`ListenerUnmatchedCount`、`ListenerMultiMatchCount`，以及 Record Delivery 的 `RecordDeliveredCount`、`RecordHandlerErrorCount`、`RecordDroppedCount`、`RecordQueueDepth`（见 §14.6）。
 
 `[Device]/Traps/Last/`：`Sequence`、`ReceivedTime`、`PduType`、`Version`、`TrapOid`、`Source`、`AgentAddress`（仅 v1）、`AgentUpTime`、`Varbinds`（JSON，最大 16 KiB）、`Json`（单值一致快照）。
 
@@ -226,3 +227,153 @@ v3 Inform 发送方可能因此报 `notInTimeWindow`，Gateway 侧计入 `AuthFa
 - Item Path 使用 `RW.` 前缀；不带前缀的路径只读。`TRAP.*` 路径与 `Traps/*` 节点始终只读。
 - **Designer 写入**：Designer 的 Comm Mode 必须为 **Read/Write**。Comm Mode 为 Read-Only 或 Off 时，Designer 客户端在本地直接返回 `Bad_GatewayCommOff`，写请求不会发到 Gateway，也不会到达模块或设备。这不是模块或设备故障；把 Comm Mode 切到 Read/Write 后重试即可。
 - 写入成功返回 Good，表示设备已对 SNMP SET 回应成功；Tag 的新值由下一次轮询回读。被拒绝时返回对应 Bad 状态（如 `Bad_NotWritable`、`Bad_UserAccessDenied`、`Bad_TypeMismatch`）。
+
+## 14. 新增章节：逐条处理 Notification
+
+依据：ADR 0010，实测见 `M1D_48_RECORD_DELIVERY.md`、`M1D_49_RECORD_QUEUE.md`、`M1D_50_HANDLER_ERRORS.md`、`M1D_43_STORM.md`（开启处理函数的重跑）。
+
+### 14.1 何时用快照 Tag，何时用处理函数
+
+| 需求 | 用法 |
+|---|---|
+| 看设备最近一条 Notification、计数趋势，按 `Last/Sequence` 或 `TRAP.Count/<oid>` 变化触发报警 | Notification Snapshot Tag（§2）即可 |
+| 每一条 Notification 都要处理：写日志、入库、转发、生成工单 | 配置处理函数（Record Delivery） |
+
+Tag 采样间隔最短 1000 ms，两次采样之间到达的多条 Notification 只有最后一条留在 `Last/*`。实测 10 条间隔 500 ms 的 Trap 只触发 6 次 Value Changed，因此 Tag 变化事件脚本不能用来逐条处理。处理函数由模块对每条被 Device 接受的 Notification 各调用一次，不经过 Tag 采样。
+
+两者可以同时使用：配置处理函数不改变快照、计数器、Inform ACK 和轮询。未配置处理函数的 Device 不产生 Record，行为与以前相同。
+
+### 14.2 配置字段
+
+Device 配置 `TRAP` 分类下新增三个字段（Label 以 Gateway 界面为准）：
+
+| 字段（Label） | 配置名 | 默认 | 说明 |
+|---|---|---|---|
+| Record Handler Project | `recordHandlerProject` | 空 | 处理函数所在的项目名。必须是已存在、已启用、非 inheritable 的项目 |
+| Record Handler Function | `recordHandlerFunction` | 空 | 项目 Script Library（Project Library）中的函数，点分路径，至少两段，例如 `snmp.handlers.onNotification`。留空即关闭逐条处理 |
+| Record Queue Capacity | `recordQueueCapacity` | `10000` | 100–100000。等待处理函数的 Record 条数上限，满了丢弃新到的 Record |
+
+需写明：
+
+- 保存时校验：Project 和 Function 必须同时填写或同时留空；Function 必须是合法的点分标识符路径；容量超出 100–100000 时报字段错误。项目和函数是否存在在运行时检查（见 §14.5），不阻止保存。
+- 函数在 Gateway 中执行，可使用 Gateway 作用域的 `system.*` 函数，不能使用 Vision/Perspective 客户端函数。
+- 每条 Record 都重新查找项目和函数，修改并保存 Script Library 后下一条 Record 就使用新代码，不需要重启 Device 或 Gateway。保存那一刻已经开始执行的调用仍按旧代码执行完。
+- 保存 Device 配置会重建 Device：队列中尚未处理的 Record 丢弃并计入旧实例的 `RecordDroppedCount`，正在执行的那一条会执行完；新实例等它结束后才开始调用，同一 Device 不会出现两路并发调用。重建后 `Traps/*` 计数与 Record 序号从头开始。
+
+### 14.3 函数签名、调用方式与 Record 内容
+
+函数只有一个参数，类型是字符串（JSON），返回值被忽略：
+
+```python
+def onNotification(record):
+    ...
+```
+
+Record 内容就是该 Device 的 `Last/Json` 在最前面加一个 `device` 字段，例如（v2c linkDown）：
+
+```json
+{"device":"core-sw-01","sequence":42,"receivedTime":"2026-10-27T08:15:02.481Z","pduType":"V2_TRAP",
+ "version":"V2C","trapOid":"1.3.6.1.6.3.1.1.5.3","source":"10.0.1.5:42013","agentAddress":"","agentUpTime":12345,
+ "varbinds":[{"oid":"1.3.6.1.2.1.1.3.0","type":"TimeTicks","value":"0:02:03.45"},
+             {"oid":"1.3.6.1.6.3.1.1.4.1.0","type":"OBJECT IDENTIFIER","value":"1.3.6.1.6.3.1.1.5.3"},
+             {"oid":"1.3.6.1.2.1.2.2.1.1.3","type":"Integer32","value":"3"}]}
+```
+
+字段含义与 `Last/*` 节点一致（§2）：`sequence` 为该 Device 内递增序号；`agentAddress` 仅 v1 有值；`varbinds` 中 `value` 一律为字符串，超过 16 KiB 时截断。模块只提供原始字段，不解析 MIB、不翻译 OID，业务含义由函数自行判断。
+
+调用方式：
+
+- 同一 Device 按到达顺序调用，一次一条，上一条返回后才调用下一条。
+- 不同 Device 之间并发，全模块共用 4 个调用线程。函数应尽快返回；一个函数卡住会占住一个线程，并阻塞该 Device 后面的所有 Record。
+- 一条 Notification 命中多个 Device（§1）时，每个 Device 各产生一条 Record，`device` 字段不同。
+
+### 14.4 最小示例函数（仅供参考）
+
+以下示例只演示用法，驱动不内置任何解析。在 Designer 中把函数写在项目的 Script Library 里（示例脚本名 `snmp/handlers`），然后在 Device 上填写 `Record Handler Project` 与 `Record Handler Function = snmp.handlers.onNotification`。
+
+写 Gateway 日志：
+
+```python
+logger = system.util.getLogger("snmp.notifications")
+
+def onNotification(record):
+    r = system.util.jsonDecode(record)
+    logger.info("device=%s seq=%s trapOid=%s source=%s" % (r["device"], r["sequence"], r["trapOid"], r["source"]))
+```
+
+写数据库（表结构、数据库连接名按现场修改）：
+
+```python
+def onNotification(record):
+    r = system.util.jsonDecode(record)
+    system.db.runPrepUpdate(
+        "INSERT INTO snmp_notification (device, seq, received_time, trap_oid, source, payload) VALUES (?,?,?,?,?,?)",
+        [r["device"], r["sequence"], r["receivedTime"], r["trapOid"], r["source"], record],
+        "MyDatabase")
+```
+
+整条 `record` 原样存入 `payload` 列，以后需要的字段可以再从中取。函数抛出的异常（例如数据库不可用）会计入 `RecordHandlerErrorCount`，该条不重试（见 §14.5）；如需保证落库，在函数内自行捕获异常并写入备用位置。
+
+### 14.5 投递保证与丢弃规则
+
+**只保证 Gateway 进程运行期间**：Record 只在内存中排队，不持久化。Gateway 重启、模块重启、Device 重启（含保存配置、禁用 Device）时，队列中尚未处理的 Record 丢弃。
+
+| 情况 | 结果 | 计数 |
+|---|---|---|
+| 函数正常返回 | 已投递 | `RecordDeliveredCount` +1 |
+| 函数抛出异常 | 不重试，继续处理下一条；每条记一条 warn 日志（含 Device、Sequence、Project、Function 和异常摘要），写入 `Traps/LastError` | `RecordHandlerErrorCount` +1 |
+| 队列已满（达到 `Record Queue Capacity`） | 丢弃新到的 Record，已在队列中的保留；`LastError` 写明容量和首个丢弃的 sequence | `RecordDroppedCount` +1 |
+| 项目不存在、已禁用或为 inheritable；函数不存在、不是函数，或 Script Library 有语法错误 | 该条丢弃；`LastError` 指出项目或函数；同一错误日志只记一次。问题修复后下一条自动恢复 | `RecordDroppedCount` +1 |
+| Device 停止或重建时队列中未处理的 Record | 丢弃 | `RecordDroppedCount` |
+| Gateway 启动/停止期间投递线程不可用 | 丢弃 | `RecordDroppedCount` |
+
+另外需写明：
+
+- **没有硬超时**：模块不会中断正在执行的函数。单次调用超过 5 秒时，在该次调用结束后记一条 warn 日志 `Slow record handler call ... elapsedMillis=...`。慢函数的影响通过 `RecordQueueDepth` 和这条日志观察。
+- **Inform ACK 不等函数**：Inform 在进入接收队列后即 ACK（与 1.1.0 其他行为一致），不等处理函数执行；函数慢或出错不会导致发送方重发。
+- 只有被 Device 接受（计入 `AcceptedCount`）的 Notification 才产生 Record；被限速、接收队列满、Unlicensed、重复 Inform、认证失败等未被接受的 Notification 不产生 Record。
+- `sequence` 出现断档说明中间有 Record 没有成功处理（丢弃或函数异常），可对照下面的计数排查。
+
+### 14.6 Record 计数与对账
+
+`[Device]/Traps/` 下新增四个只读节点（UInt64）：
+
+| 节点 | 含义 |
+|---|---|
+| `RecordDeliveredCount` | 函数正常返回的次数 |
+| `RecordHandlerErrorCount` | 函数抛出异常的次数 |
+| `RecordDroppedCount` | 未调用或无法调用函数而丢弃的 Record 数（§14.5） |
+| `RecordQueueDepth` | 当前排队的 Record 数，包含正在执行的那一条 |
+
+未配置处理函数时四个节点都为 0。配置了处理函数的 Device，自本次启动（包括保存配置后的重建）起始终满足：
+
+```text
+AcceptedCount = RecordDeliveredCount + RecordHandlerErrorCount + RecordDroppedCount + RecordQueueDepth
+```
+
+建议对 `RecordQueueDepth` 持续偏高、`RecordDroppedCount` 或 `RecordHandlerErrorCount` 增长设置报警。
+
+### 14.7 转发到 Event Streams
+
+模块不直接对接 Event Streams（Event Streams 是需额外购买的模块，逐条处理不依赖它）。已有 Event Streams 的现场可以在处理函数中转发，例如发给项目 `alarms` 中来源为 Gateway Event Listener 的 Event Stream `snmp/notifications`：
+
+```python
+def onNotification(record):
+    system.eventstream.publishEvent("alarms", "snmp/notifications", record, False)
+```
+
+`acknowledge=False` 时不等待 Event Stream 处理完即返回，避免拖慢后续 Record。
+
+### 14.8 容量参考值
+
+本机单次测试（硬件同 §12，详见 `docs/test-reports/1.1.0/M1D_43_STORM.md` 的 #51 一节）：50 台 v2c 设备 × 25 个 OID、1 s 轮询，全部设备配置处理函数，2000 trap/s 持续 5 min。
+
+- Record 不丢：612 947 条全部投递，`AcceptedCount = RecordDeliveredCount + RecordHandlerErrorCount + RecordDroppedCount + RecordQueueDepth` 逐台成立。
+- 处理函数写文件（每条一次文件追加）时处理速度约 1 900 条/s，略低于到达速度，结束时全部设备共积压约 3.5 万条，Trap 停止后约 2 分钟内处理完；没有队列满丢弃。
+- 开启处理函数后轮询 p95 延迟升高（0.97 → 2.72 ms，+181%；即使函数什么都不做也升高 +262%），轮询节奏出现最长约 200 ms 的推迟，但无超时、无 Bad 值；约 0.3% 的 Notification 在操作系统 UDP 接收缓冲被丢弃（见 §12）。不配处理函数时同一环境无此现象。
+- 驱动每处理一条 Record 约消耗 1.3 ms CPU（不含函数本身），2000 条/s 时约占 2.6 个核。
+
+手册建议：
+
+- 处理函数只做必要的轻量工作，耗时操作（远程调用、复杂计算）放到其他机制中异步完成。
+- 逐条处理面向告警类 Notification；持续每秒上千条的流量下，按上述 CPU 消耗评估 Gateway 余量，并监控 `RecordQueueDepth`。
