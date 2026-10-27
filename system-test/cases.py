@@ -750,3 +750,124 @@ def record_unconfigured():
     finally:
         delete_device(dev)
         delete_device(control)
+
+
+# ---------------------------------------------------------------- Record handler failures / hot update (#50)
+
+
+def record_accounting(dev, delivered_count, error_count, dropped_count):
+    names = ("AcceptedCount", "RecordDeliveredCount", "RecordHandlerErrorCount",
+             "RecordDroppedCount", "RecordQueueDepth")
+
+    def settled():
+        values = read(dev, *names)
+        expected = (delivered_count, error_count, dropped_count, 0)
+        return values if tuple(values[n] for n in names[1:]) == expected else None
+
+    values = wait_for(settled, 20, what=f"{dev} Record terminal counts")
+    check(values["AcceptedCount"] == sum(values[n] for n in names[1:]),
+          f"Record accounting failed: {values}")
+    return values
+
+
+@case("record:handler-exception-continues")
+def record_handler_exception():
+    prepare_records()
+    dev = record_device("st-record-exception")
+    try:
+        set_record_handler("exception")
+        send(V2C_TRAP.format(c=COMM))
+        record_accounting(dev, 0, 1, 0)
+        error = read(dev, "LastError")["LastError"]
+        check("ST_RECORD_HANDLER_ERROR" in error, f"handler error invisible: {error}")
+        check(read_records() == [], "failed handler unexpectedly appended")
+        set_record_handler("normal")
+        send(V2C_TRAP.format(c=COMM))
+        record_accounting(dev, 1, 1, 0)
+        records = read_records()
+        check([r["sequence"] for r in records] == [2], f"failed Record retried or next lost: {records}")
+        return "HandlerError=1; next Record delivered once; accounting holds"
+    finally:
+        delete_device(dev)
+        set_record_handler("normal")
+
+
+@case("record:missing-project")
+def record_missing_project():
+    return record_missing_handler("st-record-missing-project", "st-record-project-does-not-exist",
+                                  "snmp.handlers.onNotification", "st-record-project-does-not-exist")
+
+
+@case("record:missing-function")
+def record_missing_function():
+    return record_missing_handler("st-record-missing-function", "st-records",
+                                  "snmp.handlers.doesNotExist", "snmp.handlers.doesNotExist")
+
+
+def record_missing_handler(name, project, function, expected_detail):
+    prepare_records()
+    dev = v2c_device(name, recordHandlerProject=project, recordHandlerFunction=function)
+    try:
+        send(V2C_TRAP.format(c=COMM))
+        record_accounting(dev, 0, 0, 1)
+        error = read(dev, "LastError")["LastError"]
+        check(expected_detail in error, f"missing project/function not identified: {error}")
+        check(read_records() == [], "missing handler produced a call")
+        return f"Dropped=1; LastError identifies {expected_detail}; accounting holds"
+    finally:
+        delete_device(dev)
+
+
+@case("record:script-hot-update")
+def record_script_hot_update():
+    prepare_records()
+    dev = record_device("st-record-hot-update")
+    try:
+        send(V2C_TRAP.format(c=COMM))
+        record_accounting(dev, 1, 0, 0)
+        first = read_records(with_metadata=True)
+        check(len(first) == 1 and first[0]["version"] == "v1", f"initial script: {first}")
+        # Changes actual Script Library source, not the runtime version-label override.
+        # Do not restart the Device/Gateway, send warmup Records, or retry the handler.
+        import_record_project(overwrite=True, version="v2")
+        send(V2C_TRAP.format(c=COMM))
+        record_accounting(dev, 2, 0, 0)
+        records = read_records(with_metadata=True)
+        check([r["version"] for r in records] == ["v1", "v2"], f"stale script: {records}")
+        check([json.loads(r["record"])["sequence"] for r in records] == [1, 2],
+              f"Device restarted, retry, or sequence gap: {records}")
+        return "next Record uses v2 without Device/Gateway restart"
+    finally:
+        delete_device(dev)
+        import_record_project(overwrite=True, version="v1")
+        set_record_handler("normal")
+
+
+@case("record:disabled-project")
+def record_disabled_project():
+    return record_unrunnable_project("st-record-disabled", enabled=False)
+
+
+@case("record:inheritable-project")
+def record_inheritable_project():
+    return record_unrunnable_project("st-record-inheritable", inheritable=True)
+
+
+def record_unrunnable_project(name, **manifest):
+    prepare_records()
+    import_record_project(overwrite=True, **manifest)
+    dev = None
+    try:
+        dev = record_device(name)
+        send(V2C_TRAP.format(c=COMM))
+        record_accounting(dev, 0, 0, 1)
+        error = read(dev, "LastError")["LastError"]
+        check("st-records" in error and ("disabled" in error or "inheritable" in error),
+              f"unrunnable project not identified: {error}")
+        check(read_records() == [], "unrunnable project handler was invoked")
+        return "unrunnable project dropped; no script call; accounting holds"
+    finally:
+        if dev is not None:
+            delete_device(dev)
+        import_record_project(overwrite=True)
+        set_record_handler("normal")

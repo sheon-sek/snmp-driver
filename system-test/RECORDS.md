@@ -49,3 +49,17 @@ st.import_record_project(overwrite=True, version="v1") # 恢复原版
 
 SDK 实测由临时项目从普通 Java 线程调用上述函数完成，正常、异常、50 ms 慢调用和读/清空均已通过。
 本任务没有修改模块源码或安装 bypass，也没有执行 Trap 到 Record Delivery 的端到端用例；后者交由 #48/#50 集成测试。
+
+
+## #50 异常与配置用例
+
+`cases.py` 新增 `record:handler-exception-continues`、`record:missing-project`、
+`record:missing-function`、`record:disabled-project`、`record:inheritable-project`、
+`record:script-hot-update`。每个用例检查终态计数与对账式，异常用例确认后续序号可继续；
+热更新用例修改实际 Script Library 的 VERSION，下一条必须为 v2，且序号连续，不发送预热包。
+
+`import_record_project(overwrite=True, enabled=False)` 和
+`import_record_project(overwrite=True, inheritable=True)` 生成不可运行项目变体；
+默认调用恢复 enabled=true、inheritable=false。用例 finally 恢复正常项目并清除自身设备。
+
+#50 implementer 只完成 Python 语法检查，没有运行上述用例或全量系统回归；由 merger 在共享 Gateway 串行验证。

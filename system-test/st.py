@@ -139,7 +139,7 @@ RECORD_FILE = "/tmp/snmp-driver-st-records.jsonl"
 RECORD_CONTROL = "/tmp/snmp-driver-st-records-control.json"
 
 
-def import_record_project(overwrite=False, version="v1"):
+def import_record_project(overwrite=False, version="v1", enabled=True, inheritable=False):
     """Import the isolated test project; overwriting is always explicit.
 
     version="v2" changes the actual Script Library source for hot-update tests.
@@ -148,15 +148,19 @@ def import_record_project(overwrite=False, version="v1"):
     if version not in ("v1", "v2"):
         raise ValueError("record fixture version must be v1 or v2")
     source = ROOT / "projects" / RECORD_PROJECT
-    if version != "v1":
-        target = OUT / ("record-project-" + version)
+    if version != "v1" or not enabled or inheritable:
+        target = OUT / f"record-project-{version}-{enabled}-{inheritable}"
         for path in source.rglob("*"):
             if path.is_file():
                 dest = target / path.relative_to(source)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 text = path.read_text()
                 if path.name == "code.py":
-                    text = text.replace('VERSION = "v1"', 'VERSION = "v2"')
+                    text = text.replace('VERSION = "v1"', f'VERSION = "{version}"')
+                elif path.name == "project.json":
+                    manifest = json.loads(text)
+                    manifest.update(enabled=enabled, inheritable=inheritable)
+                    text = json.dumps(manifest)
                 dest.write_text(text)
         source = target
     args = ["project", "import", str(source), "--name", RECORD_PROJECT]

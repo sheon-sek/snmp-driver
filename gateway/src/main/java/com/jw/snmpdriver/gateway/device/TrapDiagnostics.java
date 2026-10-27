@@ -46,6 +46,7 @@ public final class TrapDiagnostics {
     static final String LOCAL_ENGINE_ID = "LocalEngineId";
     static final String OVERFLOW_COUNT = "OverflowCount";
     static final String RECORD_DELIVERED_COUNT = "RecordDeliveredCount";
+    static final String RECORD_HANDLER_ERROR_COUNT = "RecordHandlerErrorCount";
     static final String RECORD_DROPPED_COUNT = "RecordDroppedCount";
     static final String RECORD_QUEUE_DEPTH = "RecordQueueDepth";
     static final String LAST_FOLDER = "Last";
@@ -102,6 +103,7 @@ public final class TrapDiagnostics {
         }
         NODES.put(OVERFLOW_COUNT, NodeType.UINT64);
         NODES.put(RECORD_DELIVERED_COUNT, NodeType.UINT64);
+        NODES.put(RECORD_HANDLER_ERROR_COUNT, NodeType.UINT64);
         NODES.put(RECORD_DROPPED_COUNT, NodeType.UINT64);
         NODES.put(RECORD_QUEUE_DEPTH, NodeType.UINT64);
         NODES.put(LAST_SEQUENCE, NodeType.UINT64);
@@ -195,6 +197,7 @@ public final class TrapDiagnostics {
         sources.put("ListenerMultiMatchCount", () -> diagnostics.listenerCount(true));
         sources.put(OVERFLOW_COUNT, diagnostics.oidStates::overflowCount);
         sources.put(RECORD_DELIVERED_COUNT, () -> delivery == null ? 0 : delivery.deliveredCount());
+        sources.put(RECORD_HANDLER_ERROR_COUNT, () -> delivery == null ? 0 : delivery.handlerErrorCount());
         sources.put(RECORD_DROPPED_COUNT, () -> delivery == null ? 0 : delivery.droppedCount());
         sources.put(RECORD_QUEUE_DEPTH, () -> delivery == null ? 0 : delivery.queueDepth());
         diagnostics.recordError = () -> delivery == null ? "" : delivery.lastError();

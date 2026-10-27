@@ -97,8 +97,23 @@ class SNMPDeviceTrapConfigTest {
         }
         for (String function : new String[] {"", "  ", "snmp.handlers.onNotification", "a.b", "_x.y_1",
                 " snmp.handlers.onNotification "}) {
-            assertEquals(Map.of(), fieldErrors(decode(Map.of("recordHandlerFunction", function))), function);
+            assertEquals(Map.of(), fieldErrors(decode(Map.of("recordHandlerFunction", function,
+                    "recordHandlerProject", function.isBlank() ? "" : "Plant"))), function);
         }
+    }
+
+    @Test
+    void recordHandlerProjectAndFunctionMustBeConfiguredTogether() throws Exception {
+        for (String blank : new String[] {"", "  "}) {
+            assertFieldError("recordHandlerProject", decode(Map.of(
+                    "recordHandlerProject", blank, "recordHandlerFunction", "snmp.handlers.onNotification")));
+            assertFieldError("recordHandlerFunction", decode(Map.of(
+                    "recordHandlerProject", "Plant", "recordHandlerFunction", blank)));
+        }
+        JsonObject json = extensionPoint.encode(SNMPDeviceConfig.defaults()).getAsJsonObject();
+        json.addProperty("recordHandlerFunction", "snmp.handlers.onNotification");
+        json.add("recordHandlerProject", com.inductiveautomation.ignition.common.gson.JsonNull.INSTANCE);
+        assertFieldError("recordHandlerProject", extensionPoint.decode(json));
     }
 
     @Test

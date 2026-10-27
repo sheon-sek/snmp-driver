@@ -7,6 +7,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -21,7 +22,7 @@ import org.slf4j.LoggerFactory;
  * for a script.
  *
  * <p>Every offered Record ends in exactly one count, so
- * {@code offered = deliveredCount + droppedCount + queueDepth} (handler failures are counted by #50).
+ * {@code offered = deliveredCount + handlerErrorCount + droppedCount + queueDepth}.
  */
 final class RecordDelivery {
     /** Records handled per turn before the pool thread is handed to other Devices. */
@@ -51,6 +52,7 @@ final class RecordDelivery {
     /** True while a drain task is queued or running: at most one handler call per instance at a time. */
     private final AtomicBoolean scheduled = new AtomicBoolean();
     private final AtomicLong delivered = new AtomicLong();
+    private final AtomicLong handlerErrors = new AtomicLong();
     private final AtomicLong dropped = new AtomicLong();
     /** Records queued or in the handler right now. */
     private final AtomicLong outstanding = new AtomicLong();
@@ -101,6 +103,10 @@ final class RecordDelivery {
     /** Handler calls that returned normally. */
     long deliveredCount() {
         return delivered.get();
+    }
+
+    long handlerErrorCount() {
+        return handlerErrors.get();
     }
 
     /** Records discarded: queue full, Device stopped, or the delivery pool unavailable. */
@@ -208,17 +214,40 @@ final class RecordDelivery {
 
     private void deliver(PendingRecord record) {
         RecordHandlerInvoker.Result result;
+        long started = System.nanoTime();
         try {
             result = invoker.invoke(project, function, record.json());
-        } catch (RuntimeException error) {
+        } catch (ThreadDeath fatal) {
+            throw fatal;
+        } catch (VirtualMachineError fatal) {
+            // Script recursion can overflow the stack; OOM and other VM failures must still escape.
+            if (!(fatal instanceof StackOverflowError)) {
+                throw fatal;
+            }
+            result = RecordHandlerInvoker.Result.handlerFailed(String.valueOf(fatal));
+        } catch (Throwable error) {
             result = RecordHandlerInvoker.Result.handlerFailed(String.valueOf(error));
+        } finally {
+            long elapsed = System.nanoTime() - started;
+            if (elapsed > TimeUnit.SECONDS.toNanos(5)) {
+                logger.warn("Slow record handler call device={} sequence={} project={} function={} elapsedMillis={}",
+                        deviceName, record.sequence(), project, function,
+                        TimeUnit.NANOSECONDS.toMillis(elapsed));
+            }
         }
         if (result.outcome() == RecordHandlerInvoker.Outcome.SUCCEEDED) {
             delivered.incrementAndGet();
             lastLoggedFailure = null;
             return;
         }
-        if (!result.equals(lastLoggedFailure)) {
+        if (result.outcome() == RecordHandlerInvoker.Outcome.HANDLER_FAILED) {
+            handlerErrors.incrementAndGet();
+        } else {
+            dropped.incrementAndGet();
+        }
+        lastError = "Record handler project='" + project + "' function='" + function
+                + "' sequence=" + record.sequence() + ": " + result.detail();
+        if (result.outcome() == RecordHandlerInvoker.Outcome.HANDLER_FAILED || !result.equals(lastLoggedFailure)) {
             lastLoggedFailure = result;
             logger.warn("Record handler call failed device={} sequence={} project={} function={} outcome={} "
                     + "detail={}", deviceName, record.sequence(), project, function, result.outcome(),
