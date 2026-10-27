@@ -56,6 +56,8 @@ class SNMPDeviceRecordDeliveryTest {
         await("Sequence 10", () -> fixture.value("Last/Json") instanceof String json
                 && json.startsWith("{\"sequence\":10,"));
         assertTrue(handler.calls.size() <= 1, "handler calls must not hold up receiving");
+        await("all Records outstanding including in-flight", () -> Unsigned.ulong(10).equals(fixture.value("RecordQueueDepth")));
+        assertEquals(Unsigned.ulong(0), fixture.value("RecordDeliveredCount"));
         handler.release();
 
         await("10 handler calls", () -> handler.calls.size() == 10);
@@ -113,7 +115,120 @@ class SNMPDeviceRecordDeliveryTest {
         await("AcceptedCount 1", () -> Unsigned.ulong(1).equals(fixture.value("AcceptedCount")));
         assertTrue(((String) fixture.value("Last/Json")).startsWith("{\"sequence\":1,"));
         assertEquals(0, unused.calls.size());
+        assertEquals(Unsigned.ulong(0), fixture.value("RecordHandlerErrorCount"));
+        assertEquals(Unsigned.ulong(0), fixture.value("RecordDroppedCount"));
+        assertEquals(Unsigned.ulong(0), fixture.value("RecordQueueDepth"));
         assertEquals(Unsigned.ulong(0), fixture.value("RecordDeliveredCount"));
+    }
+
+    @Test
+    void handlerExceptionCountsAnErrorWithoutRetryAndNextRecordStillRuns() throws Exception {
+        List<Long> calls = new CopyOnWriteArrayList<>();
+        fixture = new SNMPDeviceFixture(FUNCTION, (project, function, record) -> {
+            long sequence = sequenceOf(record);
+            calls.add(sequence);
+            if (sequence == 1) throw new IllegalStateException("ST_HANDLER_BROKEN");
+            return RecordHandlerInvoker.Result.SUCCESS;
+        });
+        await("Listening", () -> "Listening".equals(fixture.value("Status")));
+        sendV2cTrap(fixture.trapPort, 1);
+        await("handler error", () -> Unsigned.ulong(1).equals(fixture.value("RecordHandlerErrorCount")));
+        sendV2cTrap(fixture.trapPort, 2);
+        await("next delivery", () -> Unsigned.ulong(1).equals(fixture.value("RecordDeliveredCount")));
+        assertEquals(List.of(1L, 2L), calls);
+        assertEquals(Unsigned.ulong(2), fixture.value("AcceptedCount"));
+        assertEquals(Unsigned.ulong(0), fixture.value("RecordDroppedCount"));
+        assertEquals(Unsigned.ulong(0), fixture.value("RecordQueueDepth"));
+        assertTrue(((String) fixture.value("LastError")).contains("ST_HANDLER_BROKEN"));
+    }
+
+    @Test
+    void scriptErrorsAreCountedAndLoggedWithSequenceAndDoNotStopLaterRecords() throws Exception {
+        java.io.PrintStream previous = System.err;
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        try {
+            System.setErr(new java.io.PrintStream(output, true, java.nio.charset.StandardCharsets.UTF_8));
+            fixture = new SNMPDeviceFixture(FUNCTION, (project, function, record) -> {
+                long sequence = sequenceOf(record);
+                if (sequence == 1) throw new StackOverflowError("ST_RECURSION");
+                if (sequence == 2) throw new AssertionError("ST_ASSERTION");
+                return RecordHandlerInvoker.Result.SUCCESS;
+            });
+            await("Listening", () -> "Listening".equals(fixture.value("Status")));
+            for (int i = 1; i <= 3; i++) sendV2cTrap(fixture.trapPort, i);
+            await("two handler errors", () -> Unsigned.ulong(2).equals(fixture.value("RecordHandlerErrorCount")));
+            await("later record delivered", () -> Unsigned.ulong(1).equals(fixture.value("RecordDeliveredCount")));
+            assertEquals(Unsigned.ulong(3), fixture.value("AcceptedCount"));
+            assertEquals(Unsigned.ulong(0), fixture.value("RecordDroppedCount"));
+            assertEquals(Unsigned.ulong(0), fixture.value("RecordQueueDepth"));
+            String log = output.toString(java.nio.charset.StandardCharsets.UTF_8);
+            assertTrue(log.contains("device=probe") && log.contains("sequence=1") && log.contains("ST_RECURSION"), log);
+            assertTrue(log.contains("sequence=2") && log.contains("ST_ASSERTION"), log);
+        } finally {
+            System.setErr(previous);
+        }
+    }
+
+    @Test
+    void slowCallWarnsOnceAfterReturningAndStillDeliversWithoutInterruption() throws Exception {
+        java.io.PrintStream previous = System.err;
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        try {
+            System.setErr(new java.io.PrintStream(output, true, java.nio.charset.StandardCharsets.UTF_8));
+            fixture = new SNMPDeviceFixture(FUNCTION, (project, function, record) -> {
+                if (sequenceOf(record) == 1) {
+                    try {
+                        Thread.sleep(5100);
+                    } catch (InterruptedException error) {
+                        throw new AssertionError("handler must not be interrupted", error);
+                    }
+                }
+                return RecordHandlerInvoker.Result.SUCCESS;
+            });
+            await("Listening", () -> "Listening".equals(fixture.value("Status")));
+            sendV2cTrap(fixture.trapPort, 1);
+            sendV2cTrap(fixture.trapPort, 2);
+            await("two calls delivered", () -> Unsigned.ulong(2).equals(fixture.value("RecordDeliveredCount")));
+            String log = output.toString(java.nio.charset.StandardCharsets.UTF_8);
+            assertEquals(1, log.split("Slow record handler call", -1).length - 1, log);
+            assertTrue(log.contains("device=probe") && log.contains("sequence=1")
+                    && log.contains("project=recordProject") && log.contains("elapsedMillis="), log);
+            assertEquals(Unsigned.ulong(0), fixture.value("RecordHandlerErrorCount"));
+        } finally {
+            System.setErr(previous);
+        }
+    }
+
+    @Test
+    void unavailableHandlerCountsDroppedAndReportsProjectAndFunctionThenRecovers() throws Exception {
+        List<Long> calls = new CopyOnWriteArrayList<>();
+        fixture = new SNMPDeviceFixture(FUNCTION, (project, function, record) -> {
+            long sequence = sequenceOf(record);
+            calls.add(sequence);
+            return switch ((int) sequence) {
+                case 1 -> RecordHandlerInvoker.Result.notFound("Project 'recordProject' is disabled");
+                case 2 -> RecordHandlerInvoker.Result.notFound("Function '" + function + "' not found");
+                case 3 -> RecordHandlerInvoker.Result.handlerFailed("ST_RETURNED_HANDLER_ERROR");
+                default -> RecordHandlerInvoker.Result.SUCCESS;
+            };
+        });
+        await("Listening", () -> "Listening".equals(fixture.value("Status")));
+        sendV2cTrap(fixture.trapPort, 1);
+        await("first drop", () -> Unsigned.ulong(1).equals(fixture.value("RecordDroppedCount")));
+        await("disabled project LastError", () -> ((String) fixture.value("LastError"))
+                .contains("recordProject' is disabled"));
+        sendV2cTrap(fixture.trapPort, 2);
+        await("second drop", () -> Unsigned.ulong(2).equals(fixture.value("RecordDroppedCount")));
+        await("missing function LastError", () -> ((String) fixture.value("LastError"))
+                .contains("Function '" + FUNCTION + "' not found"));
+        sendV2cTrap(fixture.trapPort, 3);
+        sendV2cTrap(fixture.trapPort, 4);
+        await("recovery", () -> Unsigned.ulong(1).equals(fixture.value("RecordDeliveredCount")));
+        assertEquals(List.of(1L, 2L, 3L, 4L), calls);
+        assertEquals(Unsigned.ulong(4), fixture.value("AcceptedCount"));
+        assertEquals(Unsigned.ulong(1), fixture.value("RecordHandlerErrorCount"));
+        assertEquals(Unsigned.ulong(2), fixture.value("RecordDroppedCount"));
+        assertEquals(Unsigned.ulong(0), fixture.value("RecordQueueDepth"));
     }
 
     private record Call(String project, String function, String record, String thread) {

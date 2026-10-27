@@ -5,6 +5,7 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -28,12 +29,20 @@ final class RecordDelivery {
     private final String function;
     private final RecordHandlerInvoker invoker;
     private final Supplier<Executor> pool;
-    private final Queue<String> queue = new ConcurrentLinkedQueue<>();
+    private record PendingRecord(String json, long sequence) {
+    }
+
+    private final Queue<PendingRecord> queue = new ConcurrentLinkedQueue<>();
     /** True while a drain task is queued or running: at most one handler call per Device at a time. */
     private final AtomicBoolean scheduled = new AtomicBoolean();
     private final AtomicLong delivered = new AtomicLong();
+    private final AtomicLong handlerErrors = new AtomicLong();
+    private final AtomicLong dropped = new AtomicLong();
+    /** Includes the call in flight, until it has a terminal outcome. */
+    private final AtomicLong outstanding = new AtomicLong();
+    private volatile String lastError = "";
     private volatile boolean running;
-    /** Last failure written to the log; repeats are not logged again until a call succeeds. */
+    /** Repeated lookup failures are logged once; every handler exception includes its Record sequence. */
     private RecordHandlerInvoker.Result lastLoggedFailure;
 
     RecordDelivery(String deviceName, String project, String function, RecordHandlerInvoker invoker,
@@ -71,12 +80,29 @@ final class RecordDelivery {
         return delivered.get();
     }
 
+    long handlerErrorCount() {
+        return handlerErrors.get();
+    }
+
+    long droppedCount() {
+        return dropped.get();
+    }
+
+    long queueDepth() {
+        return outstanding.get();
+    }
+
+    String lastError() {
+        return lastError;
+    }
+
     /** Called on the listener worker, in arrival order, for every Notification this Device accepted. */
-    void offer(String record) {
+    void offer(String record, long sequence) {
         if (!running) {
             return;
         }
-        queue.add(record);
+        outstanding.incrementAndGet();
+        queue.add(new PendingRecord(record, sequence));
         schedule();
     }
 
@@ -100,11 +126,15 @@ final class RecordDelivery {
     private void drain() {
         try {
             for (int handled = 0; handled < BATCH && running; handled++) {
-                String record = queue.poll();
+                PendingRecord record = queue.poll();
                 if (record == null) {
                     break;
                 }
-                deliver(record);
+                try {
+                    deliver(record);
+                } finally {
+                    outstanding.decrementAndGet();
+                }
             }
         } finally {
             scheduled.set(false);
@@ -113,22 +143,45 @@ final class RecordDelivery {
         }
     }
 
-    private void deliver(String record) {
+    private void deliver(PendingRecord record) {
         RecordHandlerInvoker.Result result;
+        long started = System.nanoTime();
         try {
-            result = invoker.invoke(project, function, record);
-        } catch (RuntimeException error) {
+            result = invoker.invoke(project, function, record.json());
+        } catch (ThreadDeath fatal) {
+            throw fatal;
+        } catch (VirtualMachineError fatal) {
+            // Script recursion can overflow the stack; OOM and other VM failures must still escape.
+            if (!(fatal instanceof StackOverflowError)) {
+                throw fatal;
+            }
+            result = RecordHandlerInvoker.Result.handlerFailed(String.valueOf(fatal));
+        } catch (Throwable error) {
             result = RecordHandlerInvoker.Result.handlerFailed(String.valueOf(error));
+        } finally {
+            long elapsed = System.nanoTime() - started;
+            if (elapsed > TimeUnit.SECONDS.toNanos(5)) {
+                logger.warn("Slow record handler call device={} sequence={} project={} function={} elapsedMillis={}",
+                        deviceName, record.sequence(), project, function,
+                        TimeUnit.NANOSECONDS.toMillis(elapsed));
+            }
         }
         if (result.outcome() == RecordHandlerInvoker.Outcome.SUCCEEDED) {
             delivered.incrementAndGet();
             lastLoggedFailure = null;
             return;
         }
-        if (!result.equals(lastLoggedFailure)) {
+        if (result.outcome() == RecordHandlerInvoker.Outcome.HANDLER_FAILED) {
+            handlerErrors.incrementAndGet();
+        } else {
+            dropped.incrementAndGet();
+        }
+        lastError = "Record handler project='" + project + "' function='" + function
+                + "' sequence=" + record.sequence() + ": " + result.detail();
+        if (result.outcome() == RecordHandlerInvoker.Outcome.HANDLER_FAILED || !result.equals(lastLoggedFailure)) {
             lastLoggedFailure = result;
-            logger.warn("Record handler call failed device={} project={} function={} outcome={} detail={}",
-                    deviceName, project, function, result.outcome(), result.detail());
+            logger.warn("Record handler call failed device={} sequence={} project={} function={} outcome={} detail={}",
+                    deviceName, record.sequence(), project, function, result.outcome(), result.detail());
         }
     }
 }

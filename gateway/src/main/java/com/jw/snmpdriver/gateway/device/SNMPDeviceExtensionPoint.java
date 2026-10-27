@@ -161,6 +161,12 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
                 "trapRateLimitPerSecond", "Trap rate limit must be 1-10000 per second.");
         // only the format: whether the project and function exist is checked at runtime (ADR 0007)
         String function = config.recordHandlerFunction();
+        boolean hasFunction = function != null && !function.isBlank();
+        boolean hasProject = config.recordHandlerProject() != null && !config.recordHandlerProject().isBlank();
+        errors.checkField(!hasFunction || hasProject, "recordHandlerProject",
+                "Set Record Handler Project together with Record Handler Function, or leave both empty.");
+        errors.checkField(!hasProject || hasFunction, "recordHandlerFunction",
+                "Set Record Handler Function together with Record Handler Project, or leave both empty.");
         errors.checkField(function == null || function.isBlank()
                         || SNMPDeviceConfig.isValidRecordHandlerFunction(function),
                 "recordHandlerFunction",

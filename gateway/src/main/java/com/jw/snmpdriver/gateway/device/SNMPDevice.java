@@ -107,7 +107,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                 services::recordExecutor);
         RecordDelivery delivery = recordDelivery;
         this.trapDiagnostics = TrapDiagnostics.forNodes(this, context, services::licenseVerdict, trapCounters,
-                () -> delivery == null ? 0 : delivery.deliveredCount());
+                delivery);
 
         getLifecycleManager().addLifecycle(subscriptionModel);
         getLifecycleManager().addStartupTask(this::onStartup);
@@ -490,7 +490,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     private void acceptNotification(TrapNotification notification) {
         TrapState.Snapshot snapshot = trapDiagnostics.accept(notification);
         if (recordDelivery != null) {
-            recordDelivery.offer(TrapState.recordJson(context.getName(), snapshot));
+            recordDelivery.offer(TrapState.recordJson(context.getName(), snapshot), snapshot.sequence());
         }
     }
 

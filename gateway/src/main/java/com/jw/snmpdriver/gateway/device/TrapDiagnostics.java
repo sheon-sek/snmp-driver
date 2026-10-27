@@ -100,6 +100,9 @@ public final class TrapDiagnostics {
         }
         NODES.put(OVERFLOW_COUNT, NodeType.UINT64);
         NODES.put(RECORD_DELIVERED_COUNT, NodeType.UINT64);
+        NODES.put("RecordHandlerErrorCount", NodeType.UINT64);
+        NODES.put("RecordDroppedCount", NodeType.UINT64);
+        NODES.put("RecordQueueDepth", NodeType.UINT64);
         NODES.put(LAST_SEQUENCE, NodeType.UINT64);
         NODES.put(LAST_RECEIVED_TIME, NodeType.DATE_TIME);
         NODES.put(LAST_PDU_TYPE, NodeType.STRING);
@@ -151,6 +154,8 @@ public final class TrapDiagnostics {
     /** Standing configuration limit (e.g. no v3 Trap without a sender engineID); hidden while Disabled. */
     private String configNotice = "";
     private String engineIdHex = "";
+    private Supplier<String> recordError = () -> "";
+    private String lastRecordError = "";
     private NodeWriter writer;
 
     TrapDiagnostics(BiConsumer<String, Object> sink) {
@@ -169,12 +174,12 @@ public final class TrapDiagnostics {
     }
 
     /**
-     * Writes to variable nodes created by {@link #createUnder}. {@code recordDelivered} counts Record handler
-     * calls that returned normally; it stays 0 on a Device without a Record Handler Function.
+     * Writes to variable nodes created by {@link #createUnder}. Record counters remain zero without a handler;
+     * queue depth includes the in-flight call until its terminal outcome is known.
      */
     public static TrapDiagnostics forNodes(SNMPDevice addressSpace, DeviceContext context,
                                            Supplier<LicenseGate.Verdict> license, TrapCounters counters,
-                                           LongSupplier recordDelivered) {
+                                           RecordDelivery delivery) {
         NodeWriter writer = new NodeWriter(addressSpace, context);
         Map<String, LongSupplier> sources = new LinkedHashMap<>();
         TrapDiagnostics diagnostics = new TrapDiagnostics(writer::set, license, sources);
@@ -188,7 +193,11 @@ public final class TrapDiagnostics {
         sources.put("ListenerUnmatchedCount", () -> diagnostics.listenerCount(false));
         sources.put("ListenerMultiMatchCount", () -> diagnostics.listenerCount(true));
         sources.put(OVERFLOW_COUNT, diagnostics.oidStates::overflowCount);
-        sources.put(RECORD_DELIVERED_COUNT, recordDelivered);
+        sources.put(RECORD_DELIVERED_COUNT, () -> delivery == null ? 0 : delivery.deliveredCount());
+        sources.put("RecordHandlerErrorCount", () -> delivery == null ? 0 : delivery.handlerErrorCount());
+        sources.put("RecordDroppedCount", () -> delivery == null ? 0 : delivery.droppedCount());
+        sources.put("RecordQueueDepth", () -> delivery == null ? 0 : delivery.queueDepth());
+        diagnostics.recordError = () -> delivery == null ? "" : delivery.lastError();
         diagnostics.writer = writer;
         return diagnostics;
     }
@@ -265,6 +274,11 @@ public final class TrapDiagnostics {
 
     /** Writes the counters whose value changed since the last flush; driven once per second. */
     public synchronized void flushCounters() {
+        String error = recordError.get();
+        if (!error.equals(lastRecordError)) {
+            lastRecordError = error;
+            refresh();
+        }
         counterSources.forEach((name, source) -> {
             long value = source.getAsLong();
             if (!Long.valueOf(value).equals(publishedCounters.getOrDefault(name, 0L))) {
@@ -391,7 +405,7 @@ public final class TrapDiagnostics {
             return;
         }
         lastNotice = message;
-        sink.accept(LAST_ERROR, message);
+        sink.accept(LAST_ERROR, join(join(message, identityNotice), recordError.get()));
     }
 
     private void publish(Status status, String error, String endpoint) {
@@ -404,7 +418,8 @@ public final class TrapDiagnostics {
             case NOT_AVAILABLE -> new StatusCode(StatusCodes.Bad_LicenseNotAvailable);
         });
         sink.accept(STATUS, status.text);
-        sink.accept(LAST_ERROR, join(join(error, status == Status.DISABLED ? "" : configNotice), identityNotice));
+        String notice = join(join(error, status == Status.DISABLED ? "" : configNotice), identityNotice);
+        sink.accept(LAST_ERROR, join(notice, recordError.get()));
         sink.accept(LISTENER_ENDPOINT, endpoint);
     }
 
