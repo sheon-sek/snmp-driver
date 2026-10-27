@@ -600,13 +600,13 @@ def delivered(dev, count, timeout=15):
              timeout, what=f"{dev} delivered {count}")
 
 
-RECORD_COUNTS = ("AcceptedCount", "RecordDeliveredCount", "RecordDroppedCount", "RecordQueueDepth")
+RECORD_COUNTS = ("AcceptedCount", "RecordDeliveredCount", "RecordHandlerErrorCount",
+                 "RecordDroppedCount", "RecordQueueDepth")
 
 
 def record_counts(dev):
     c = read(dev, *RECORD_COUNTS)
-    # HandlerError is added by #50; until then a successful handler leaves it out of the reconciliation
-    check(c["AcceptedCount"] == c["RecordDeliveredCount"] + c["RecordDroppedCount"] + c["RecordQueueDepth"],
+    check(c["AcceptedCount"] == sum(c[name] for name in RECORD_COUNTS[1:]),
           f"reconciliation broken: {c}")
     return c
 
