@@ -89,5 +89,17 @@ public record SNMPDeviceConfig(
                 false, "0.0.0.0", 162, TrapSecurity.COMMUNITY, null, "", true, "", 100
         );
     }
+
+    /**
+     * An engineID as tools print it ({@code 80 00 1F 88 …}, {@code 80:00:1f:…}, {@code 0x80001F…}) reduced to
+     * plain hex digits; empty for null. Whether the result is valid hex is left to the caller.
+     */
+    public static String normalizeEngineId(String engineId) {
+        if (engineId == null) {
+            return "";
+        }
+        String hex = engineId.replaceAll("[\\s:]", "");
+        return hex.startsWith("0x") || hex.startsWith("0X") ? hex.substring(2) : hex;
+    }
 }
 

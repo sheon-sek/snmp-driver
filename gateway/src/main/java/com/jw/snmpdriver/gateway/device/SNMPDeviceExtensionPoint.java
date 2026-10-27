@@ -149,8 +149,11 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
         errors.checkField(config.trapPort() >= 1 && config.trapPort() <= 65_535,
                 "trapPort", "Trap port must be 1-65535.");
         errors.requireNotNull("trapSecurity", config.trapSecurity());
-        errors.checkField(isValidEngineId(config.trapSenderEngineId()),
-                "trapSenderEngineId", "Trap sender engine ID must be 10-64 hex digits (5-32 bytes).");
+        // only USM Traps use it; a stale value must not block saving unrelated changes
+        if (config.trapEnabled() && config.trapSecurity() == SNMPDeviceConfig.TrapSecurity.USM) {
+            errors.checkField(isValidEngineId(config.trapSenderEngineId()), "trapSenderEngineId",
+                    "Trap sender engine ID must be 10-64 hex digits (5-32 bytes); spaces, colons and 0x are allowed.");
+        }
         errors.checkField(isValidAllowlist(config.trapSourceAllowlist()),
                 "trapSourceAllowlist", "Trap source allowlist must be comma-separated IP addresses or CIDR ranges.");
         errors.checkField(config.trapRateLimitPerSecond() >= 1 && config.trapRateLimitPerSecond() <= 10_000,
@@ -169,10 +172,11 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
     }
 
     private static boolean isValidEngineId(String engineId) {
-        if (engineId == null || engineId.isEmpty()) {
+        if (engineId == null || engineId.isBlank()) {
             return true;
         }
-        return engineId.matches("[0-9a-fA-F]{10,64}") && engineId.length() % 2 == 0;
+        String hex = SNMPDeviceConfig.normalizeEngineId(engineId);
+        return hex.matches("[0-9a-fA-F]{10,64}") && hex.length() % 2 == 0;
     }
 
     private static boolean isValidAllowlist(String allowlist) {

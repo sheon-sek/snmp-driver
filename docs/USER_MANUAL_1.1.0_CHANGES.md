@@ -32,7 +32,7 @@ Device 配置新增 `TRAP` 分类，字段如下（表单 Label 以 Gateway 界�
 | Trap Port | `trapPort` | `162` | 见 §9 端口指引 |
 | Trap Security | `trapSecurity` | `COMMUNITY` | `USM` 要求 SNMP Version 为 V3，并沿用 `V3_SECURITY` 分类的用户与口令 |
 | Trap Community | `trapCommunity` | 空 | COMMUNITY 模式使用；为空时沿用 Read Community |
-| Trap Sender Engine ID | `trapSenderEngineId` | 空 | 仅 V3；hex，5–32 字节；接收 v3 Trap 必填，见 §8 |
+| Trap Sender Engine ID | `trapSenderEngineId` | 空 | 仅 V3；hex，5–32 字节；接收 v3 Trap 必填，见 §8。可直接粘贴工具输出的格式（空格、冒号分隔或 `0x` 前缀）；只在 Trap 开启且 Trap Security 为 USM 时校验 |
 | Accept Inform | `trapAcceptInform` | 开启 | |
 | Trap Source Allowlist | `trapSourceAllowlist` | 空 | 逗号分隔 IP/CIDR，追加 Device Host 之外的来源地址 |
 | Trap Rate Limit per Second | `trapRateLimitPerSecond` | `100` | 1–10000，突发上限为 2 倍 |

@@ -67,7 +67,8 @@ public record TrapV3User(
                 authenticated ? authOid(auth) : null, authenticated ? bytes(authPassphrase) : null,
                 encrypted ? privOid(privacy) : null, encrypted ? bytes(privacyPassphrase) : null,
                 senderEngineHex == null || senderEngineHex.isBlank()
-                        ? null : HexFormat.of().parseHex(senderEngineHex.trim()), credentialRef);
+                        ? null : HexFormat.of().parseHex(SNMPDeviceConfig.normalizeEngineId(senderEngineHex)),
+                credentialRef);
     }
 
     /**
