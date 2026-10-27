@@ -50,6 +50,7 @@ final class SNMPDeviceFixture implements AutoCloseable {
     private final List<SNMPDevice> extraDevices = new CopyOnWriteArrayList<>();
     private final ServiceBundle bundle = new ServiceBundle();
     private final AtomicInteger nextItemId = new AtomicInteger();
+    private boolean deviceStopped;
 
     /** The Gateway is faked, so the Trap Community is resolved by the device's SecretResolver test seam. */
     SNMPDeviceFixture(boolean trapEnabled, String trapCommunity, boolean licensed) throws Exception {
@@ -85,7 +86,8 @@ final class SNMPDeviceFixture implements AutoCloseable {
         }
 
         OpcUaServer server = new OpcUaServer(OpcUaServerConfig.builder().build(), null);
-        SNMPDeviceConfig config = trapConfig(trapEnabled, trapPort, trapSecurity, trapSenderEngineId, "", "");
+        SNMPDeviceConfig config = trapConfig(trapEnabled, trapPort, trapSecurity, trapSenderEngineId, "", "",
+                SNMPDeviceConfig.defaults().recordQueueCapacity());
         device = new SNMPDevice(deviceContext(server, gateway, "probe"), config, bundle, secret -> trapCommunity);
         device.startup();
         if (!servicesStarted) {
@@ -98,6 +100,12 @@ final class SNMPDeviceFixture implements AutoCloseable {
      * {@code recordHandlerFunction} leaves Record Delivery unconfigured.
      */
     SNMPDeviceFixture(String recordHandlerFunction, RecordHandlerInvoker recordHandler) throws Exception {
+        this(recordHandlerFunction, recordHandler, SNMPDeviceConfig.defaults().recordQueueCapacity());
+    }
+
+    /** As above with the given Record Queue Capacity; the fixture skips save-time validation, so any size works. */
+    SNMPDeviceFixture(String recordHandlerFunction, RecordHandlerInvoker recordHandler, int recordQueueCapacity)
+            throws Exception {
         trapPort = freeUdpPort();
         gateway = gatewayContext();
         var setup = ServiceBundle.class.getDeclaredMethod("setupProcess", GatewayContext.class);
@@ -105,20 +113,30 @@ final class SNMPDeviceFixture implements AutoCloseable {
         setup.invoke(bundle, gateway);
         bundle.ensureStarted();
         license(true);
-        device = startDevice("probe", recordHandlerFunction, recordHandler);
+        device = startDevice("probe", recordHandlerFunction, recordHandler, recordQueueCapacity);
     }
 
     /** Another Device on the same Gateway, Trap port and source, so every Notification reaches both. */
     SNMPDevice addDevice(String name, String recordHandlerFunction, RecordHandlerInvoker recordHandler) {
-        SNMPDevice other = startDevice(name, recordHandlerFunction, recordHandler);
+        SNMPDevice other = startDevice(name, recordHandlerFunction, recordHandler,
+                SNMPDeviceConfig.defaults().recordQueueCapacity());
         extraDevices.add(other);
         return other;
     }
 
-    private SNMPDevice startDevice(String name, String recordHandlerFunction, RecordHandlerInvoker recordHandler) {
+    /** Stops the main Device as a configuration save, disable or module reload would; {@link #close} skips it. */
+    void stopDevice() {
+        if (!deviceStopped) {
+            deviceStopped = true;
+            device.shutdown();
+        }
+    }
+
+    private SNMPDevice startDevice(String name, String recordHandlerFunction, RecordHandlerInvoker recordHandler,
+                                   int recordQueueCapacity) {
         OpcUaServer server = new OpcUaServer(OpcUaServerConfig.builder().build(), null);
         SNMPDeviceConfig config = trapConfig(true, trapPort, SNMPDeviceConfig.TrapSecurity.COMMUNITY, "",
-                "recordProject", recordHandlerFunction);
+                "recordProject", recordHandlerFunction, recordQueueCapacity);
         SNMPDevice started = new SNMPDevice(deviceContext(server, gateway, name), config, bundle,
                 secret -> "public", recordHandler);
         started.startup();
@@ -128,14 +146,15 @@ final class SNMPDeviceFixture implements AutoCloseable {
     /** V3 + NO_AUTH_NO_PRIV keeps the polling side free of Secrets. */
     private static SNMPDeviceConfig trapConfig(boolean trapEnabled, int trapPort,
                                                SNMPDeviceConfig.TrapSecurity trapSecurity, String trapSenderEngineId,
-                                               String recordHandlerProject, String recordHandlerFunction) {
+                                               String recordHandlerProject, String recordHandlerFunction,
+                                               int recordQueueCapacity) {
         SNMPDeviceConfig d = SNMPDeviceConfig.defaults();
         return new SNMPDeviceConfig("127.0.0.1", 161, d.ipFamily(), SNMPDeviceConfig.Version.V3,
                 null, null, "probe", SNMPDeviceConfig.SecurityLevel.NO_AUTH_NO_PRIV, d.authProtocol(), null,
                 d.privacyProtocol(), null, "", d.accessMode(), d.timeoutMillis(), d.retries(), d.maxOidsPerRequest(),
                 d.maxRequestBytes(), d.maxInflightPerDevice(), trapEnabled, "127.0.0.1", trapPort,
                 trapSecurity, null, trapSenderEngineId, true, "", 1000,
-                recordHandlerProject, recordHandlerFunction);
+                recordHandlerProject, recordHandlerFunction, recordQueueCapacity);
     }
 
     /** A licensed Device with the caller's polling config; {@code secrets} supplies every SecretConfig plaintext. */
@@ -232,7 +251,7 @@ final class SNMPDeviceFixture implements AutoCloseable {
     @Override
     public void close() {
         extraDevices.forEach(SNMPDevice::shutdown);
-        device.shutdown();
+        stopDevice();
         bundle.stop();
     }
 
