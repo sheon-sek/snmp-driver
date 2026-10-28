@@ -31,3 +31,8 @@ def onNotification(record):
     finally:
         lock.unlock()
     return version
+
+
+def onNotificationNoop(record):
+    # Storm baseline (#51): measures the driver's per-Record cost without the sink's file I/O.
+    return VERSION
