@@ -1,9 +1,12 @@
 package com.jw.snmpdriver.gateway.device;
 
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -28,15 +31,66 @@ final class RecordDelivery {
     /** Records handled per turn before the pool thread is handed to other Devices. */
     private static final int BATCH = 64;
 
-    /**
-     * One lock per Device name, shared by every instance: a Device rebuilt by a configuration save waits for the
-     * old instance's running call, so the same Device never calls its function twice at once.
-     */
-    private static final ConcurrentMap<String, Object> CALL_LOCKS = new ConcurrentHashMap<>();
-
     private static final Logger logger = LoggerFactory.getLogger(RecordDelivery.class);
 
     private record PendingRecord(String json, long sequence) {
+    }
+
+    /**
+     * Serializes the handler calls of every instance of one Device name: a Device rebuilt by a configuration save
+     * never calls its function while the old instance's call still runs. An instance that finds another one inside
+     * a call parks instead of holding a pool thread, and is rescheduled when that call ends, so one stuck Device
+     * cannot use up the threads shared by all Devices. An entry lives only while a call runs or an instance is
+     * parked. A renamed Device is a different name here (ADR 0010).
+     */
+    private static final class CallGate {
+        /** Guarded by itself. */
+        private static final Map<String, CallGate> GATES = new HashMap<>();
+
+        private RecordDelivery caller;
+        private final Set<RecordDelivery> parked = new LinkedHashSet<>();
+
+        /** True when {@code delivery} may call now; otherwise it is parked until the running call ends. */
+        static boolean enter(String name, RecordDelivery delivery) {
+            synchronized (GATES) {
+                CallGate gate = GATES.computeIfAbsent(name, key -> new CallGate());
+                if (gate.caller == null) {
+                    gate.caller = delivery;
+                    gate.parked.remove(delivery);
+                    return true;
+                }
+                gate.parked.add(delivery);
+                return false;
+            }
+        }
+
+        /** Ends {@code delivery}'s call; returns the instances parked meanwhile, which must be rescheduled. */
+        static List<RecordDelivery> exit(String name, RecordDelivery delivery) {
+            synchronized (GATES) {
+                CallGate gate = GATES.get(name);
+                if (gate == null || gate.caller != delivery) {
+                    return List.of();
+                }
+                GATES.remove(name);
+                return List.copyOf(gate.parked);
+            }
+        }
+
+        /** A stopped instance stops waiting; the entry goes once nothing runs or waits. */
+        static void leave(String name, RecordDelivery delivery) {
+            synchronized (GATES) {
+                CallGate gate = GATES.get(name);
+                if (gate != null && gate.parked.remove(delivery) && gate.caller == null) {
+                    GATES.remove(name);
+                }
+            }
+        }
+
+        static boolean tracks(String name) {
+            synchronized (GATES) {
+                return GATES.containsKey(name);
+            }
+        }
     }
 
     private final String deviceName;
@@ -45,12 +99,13 @@ final class RecordDelivery {
     private final int capacity;
     private final RecordHandlerInvoker invoker;
     private final Supplier<Executor> pool;
-    private final Object callLock;
     private final BlockingQueue<PendingRecord> queue;
     /** Guards {@link #running} so a Record offered while stopping is either drained by stop() or counted. */
     private final Object lifecycle = new Object();
     /** True while a drain task is queued or running: at most one handler call per instance at a time. */
     private final AtomicBoolean scheduled = new AtomicBoolean();
+    /** Set when another instance's call ended while this one was parking: its drain must schedule again. */
+    private final AtomicBoolean wake = new AtomicBoolean();
     private final AtomicLong delivered = new AtomicLong();
     private final AtomicLong handlerErrors = new AtomicLong();
     private final AtomicLong dropped = new AtomicLong();
@@ -71,8 +126,12 @@ final class RecordDelivery {
         this.capacity = Math.max(1, capacity);
         this.invoker = Objects.requireNonNull(invoker);
         this.pool = Objects.requireNonNull(pool);
-        this.callLock = CALL_LOCKS.computeIfAbsent(deviceName, name -> new Object());
         this.queue = new LinkedBlockingQueue<>(this.capacity);
+    }
+
+    /** True while some instance of {@code deviceName} is inside a handler call or waiting for one to end. */
+    static boolean holdsCallState(String deviceName) {
+        return CallGate.tracks(deviceName);
     }
 
     /** Null when the Device has no Record Handler Function: such a Device produces no Records at all. */
@@ -98,6 +157,7 @@ final class RecordDelivery {
             running = false;
             dropQueued();
         }
+        CallGate.leave(deviceName, this);
     }
 
     /** Handler calls that returned normally. */
@@ -185,24 +245,41 @@ final class RecordDelivery {
     }
 
     private void drain() {
+        wake.set(false);
+        boolean parked = false;
         try {
-            for (int handled = 0; handled < BATCH && isRunning(); handled++) {
-                PendingRecord record = queue.poll();
-                if (record == null) {
+            for (int handled = 0; handled < BATCH && isRunning() && !queue.isEmpty(); handled++) {
+                if (!CallGate.enter(deviceName, this)) {
+                    // another instance of this Device is inside a call: give the thread back, resume when it ends
+                    parked = true;
                     break;
                 }
+                PendingRecord record = queue.poll();
                 try {
-                    synchronized (callLock) {
-                        deliver(record);
+                    if (record != null) {
+                        try {
+                            deliver(record);
+                        } finally {
+                            outstanding.decrementAndGet();
+                        }
                     }
                 } finally {
-                    outstanding.decrementAndGet();
+                    for (RecordDelivery waiting : CallGate.exit(deviceName, this)) {
+                        waiting.wake.set(true);
+                        waiting.schedule();
+                    }
+                }
+                if (record == null) {
+                    break;
                 }
             }
         } finally {
             scheduled.set(false);
-            // a Record offered while this turn was finishing would otherwise wait for the next offer
-            schedule();
+            // a Record offered while this turn was finishing would otherwise wait for the next offer;
+            // a parked turn reschedules only if the blocking call already ended
+            if (!parked || wake.getAndSet(false)) {
+                schedule();
+            }
         }
     }
 
@@ -238,6 +315,8 @@ final class RecordDelivery {
         if (result.outcome() == RecordHandlerInvoker.Outcome.SUCCEEDED) {
             delivered.incrementAndGet();
             lastLoggedFailure = null;
+            // the function works again: an earlier failure, overflow or pool notice no longer applies
+            lastError = "";
             return;
         }
         if (result.outcome() == RecordHandlerInvoker.Outcome.HANDLER_FAILED) {
@@ -247,7 +326,7 @@ final class RecordDelivery {
         }
         lastError = "Record handler project='" + project + "' function='" + function
                 + "' sequence=" + record.sequence() + ": " + result.detail();
-        if (result.outcome() == RecordHandlerInvoker.Outcome.HANDLER_FAILED || !result.equals(lastLoggedFailure)) {
+        if (!result.equals(lastLoggedFailure)) {
             lastLoggedFailure = result;
             logger.warn("Record handler call failed device={} sequence={} project={} function={} outcome={} "
                     + "detail={}", deviceName, record.sequence(), project, function, result.outcome(),

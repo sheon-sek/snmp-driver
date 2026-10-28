@@ -456,4 +456,14 @@ class NotificationRouterTest {
         assertTrue(n.varbindsTruncated());
         assertEquals("1.3.6.1.6.3.1.1.5.3", n.trapOid());
     }
+
+    @Test
+    void usmParseErrorIsNotReportedAsADecryptionFailure() {
+        String parse = NotificationRouter.usmFailure(org.snmp4j.mp.SnmpConstants.SNMPv3_USM_PARSE_ERROR);
+        String decryption = NotificationRouter.usmFailure(org.snmp4j.mp.SnmpConstants.SNMPv3_USM_DECRYPTION_ERROR);
+
+        assertTrue(parse.contains("安全参数无法解析"), parse);
+        assertTrue(!parse.contains("解密失败"), parse);
+        assertEquals("认证通过但解密失败。请检查 Privacy Protocol 与 Privacy Passphrase。", decryption);
+    }
 }

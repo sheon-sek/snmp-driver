@@ -11,3 +11,4 @@ Notification Snapshot 经 Tag 采样（最短 1000 ms）后，突发时会丢失
 - **投递保证**：只保证 Gateway 进程运行期间不丢。每个 Device 一个有界队列（默认 10000），满了丢新到的；项目或函数找不到、Device 重启时队列中的 Record 都丢弃并计入 `RecordDroppedCount`；函数抛异常计入 `RecordHandlerErrorCount`，不重试，继续下一条；不设硬超时，用 `RecordQueueDepth` 与慢调用日志观察。对账关系：`AcceptedCount = RecordDeliveredCount + RecordHandlerErrorCount + RecordDroppedCount + RecordQueueDepth`。
 - **Inform ACK 不变**（ADR 0004）：仍在进入内存队列后 ACK，不等脚本处理完，避免脚本慢或出错时发送方无限重发。
 - 同一 Device 内按序、一次一条；不同 Device 之间并发，使用有界线程池。未配置处理函数的 Device 不产生 Record，行为与之前完全相同。
+- **保存配置重建 Device 时不并发调用**：新实例在旧实例的调用结束前不调用处理函数；等待期间不占用共享线程，旧调用结束后再调度，所以一个卡住的处理函数加多次保存只占一个线程，不影响其他 Device。按 Device 名识别同一 Device，调用结束且无等待时释放，删除的 Device 不留状态。**改名边界**：Device 改名后新名称视为另一个 Device，新实例不等旧名称实例仍在运行的调用，处理函数可能短暂被并发调用一次；需要严格串行的处理函数自行加锁。
