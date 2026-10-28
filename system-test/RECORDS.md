@@ -59,10 +59,13 @@ SDK 实测由临时项目从普通 Java 线程调用上述函数完成，正常�
 `cases.py` 新增 `record:handler-exception-continues`、`record:missing-project`、
 `record:missing-function`、`record:disabled-project`、`record:inheritable-project`、
 `record:script-hot-update`。每个用例检查终态计数与对账式，异常用例确认后续序号可继续；
-热更新用例修改实际 Script Library 的 VERSION，下一条必须为 v2，且序号连续，不发送预热包。
+热更新用例修改实际 Script Library 的 VERSION，Gateway 异步应用项目保存后生效：导入 v2 后发送新的 Trap，最多观察 15 秒，要求出现 v2 后不再出现 v1，且所有 Record 序号连续、每条只投递一次。测试不重启 Device/Gateway，不重试已接受的 Record；报告记录从导入开始到首次观察 v2 的延迟。
 
 `import_record_project(overwrite=True, enabled=False)` 和
 `import_record_project(overwrite=True, inheritable=True)` 生成不可运行项目变体；
 默认调用恢复 enabled=true、inheritable=false。用例 finally 恢复正常项目并清除自身设备。
 
 #50 implementer 只完成 Python 语法检查，没有运行上述用例或全量系统回归；由 merger 在共享 Gateway 串行验证。
+
+#51 集成实测：修正版 Record 集首次观察 v2 为导入开始后 1.767 s；之后三条保持 v2，序号连续。该时间包含导入命令、发包和读 sink 开销。
+全量 60/60 回归中同一观测延迟为 4.385 s；这两次数据不构成固定延迟保证。

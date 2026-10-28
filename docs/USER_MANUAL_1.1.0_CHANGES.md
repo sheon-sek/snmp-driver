@@ -257,7 +257,7 @@ Device 配置 `TRAP` 分类下新增三个字段（Label 以 Gateway 界面为�
 
 - 保存时校验：Project 和 Function 必须同时填写或同时留空；Function 必须是合法的点分标识符路径；容量超出 100–100000 时报字段错误。项目和函数是否存在在运行时检查（见 §14.5），不阻止保存。
 - 函数在 Gateway 中执行，可使用 Gateway 作用域的 `system.*` 函数，不能使用 Vision/Perspective 客户端函数。
-- 每条 Record 都重新查找项目和函数，修改并保存 Script Library 后下一条 Record 就使用新代码，不需要重启 Device 或 Gateway。保存那一刻已经开始执行的调用仍按旧代码执行完。
+- 每条 Record 都重新查找项目和函数；Gateway 异步应用 Script Library 保存后，后续 Record 使用新代码，不需要重启 Device 或 Gateway。保存命令返回不代表重载已完成；集成测试从导入开始到首次观察新代码为 1.767 / 4.385 秒（两次运行，含导入、发包和读取开销，不是固定时限保证）。重载前已开始的调用仍按旧代码执行完。
 - 保存 Device 配置会重建 Device：队列中尚未处理的 Record 丢弃并计入旧实例的 `RecordDroppedCount`，正在执行的那一条会执行完；新实例等它结束后才开始调用，同一 Device 不会出现两路并发调用。重建后 `Traps/*` 计数与 Record 序号从头开始。
 
 ### 14.3 函数签名、调用方式与 Record 内容
@@ -377,3 +377,5 @@ def onNotification(record):
 
 - 处理函数只做必要的轻量工作，耗时操作（远程调用、复杂计算）放到其他机制中异步完成。
 - 逐条处理面向告警类 Notification；持续每秒上千条的流量下，按上述 CPU 消耗评估 Gateway 余量，并监控 `RecordQueueDepth`。
+
+上述为当前版本开启处理函数时的容量参考值，并非保证吞吐；2000 trap/s 下轮询 p95 未达到增幅 <20% 的验收阈值，负责人已接受该限制，性能优化跟踪于 1.1.1 #52。

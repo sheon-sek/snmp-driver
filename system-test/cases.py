@@ -827,16 +827,37 @@ def record_script_hot_update():
         record_accounting(dev, 1, 0, 0)
         first = read_records(with_metadata=True)
         check(len(first) == 1 and first[0]["version"] == "v1", f"initial script: {first}")
-        # Changes actual Script Library source, not the runtime version-label override.
-        # Do not restart the Device/Gateway, send warmup Records, or retry the handler.
+        # Gateway applies project imports asynchronously. Observe that boundary
+        # without restarting Device/Gateway or retrying any accepted Record.
+        started = time.monotonic()
         import_record_project(overwrite=True, version="v2")
-        send(V2C_TRAP.format(c=COMM))
-        record_accounting(dev, 2, 0, 0)
+        sent = 1
+        records = first
+        while time.monotonic() - started < 15:
+            send(V2C_TRAP.format(c=COMM))
+            sent += 1
+            record_accounting(dev, sent, 0, 0)
+            records = read_records(with_metadata=True)
+            if any(r["version"] == "v2" for r in records):
+                break
+            time.sleep(0.1)
+        elapsed = time.monotonic() - started
+        check(any(r["version"] == "v2" for r in records) and elapsed <= 15,
+              f"v2 not applied within 15 s ({elapsed:.3f}s): {records}")
+        # More new Records must keep using v2 once the new script is visible.
+        for _ in range(3):
+            send(V2C_TRAP.format(c=COMM))
+            sent += 1
+            record_accounting(dev, sent, 0, 0)
         records = read_records(with_metadata=True)
-        check([r["version"] for r in records] == ["v1", "v2"], f"stale script: {records}")
-        check([json.loads(r["record"])["sequence"] for r in records] == [1, 2],
+        versions = [r["version"] for r in records]
+        first_v2 = versions.index("v2")
+        check(all(v == "v1" for v in versions[:first_v2])
+              and all(v == "v2" for v in versions[first_v2:]),
+              f"script reverted after v2: {versions}")
+        check([json.loads(r["record"])["sequence"] for r in records] == list(range(1, sent + 1)),
               f"Device restarted, retry, or sequence gap: {records}")
-        return "next Record uses v2 without Device/Gateway restart"
+        return f"v2 observed {elapsed:.3f}s after import start; no subsequent v1; {sent} Records in order"
     finally:
         delete_device(dev)
         import_record_project(overwrite=True, version="v1")
