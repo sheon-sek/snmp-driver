@@ -630,6 +630,41 @@ def blast(hexpdu, count, gap_ms):
     return float(sx(f'python -c "{py}"', timeout=120).stdout.strip().splitlines()[-1])
 
 
+@case("restart:license-pending-traps")
+def restart_license_pending_traps():
+    """Restart smoke; a non-observable PENDING window must be reported rather than claimed covered."""
+    from st import restart_gateway
+    pdu = v2c_trap_pdu()
+    prepare_records()
+    dev = record_device("st-license-pending", trapRateLimitPerSecond=10000)
+    try:
+        restart_gateway()
+        # Only send once the listener is known bound: UDP sent to an unbound port cannot be staged.
+        wait_status(dev, "Listening", 90)
+        blast(pdu, 10, 10)
+        hint = read(dev, "LastError")["LastError"]
+        wait_for(lambda: read(dev, "AcceptedCount")["AcceptedCount"] == 10,
+                 60, what="10 post-restart Traps accepted after License verdict")
+        delivered(dev, 10, timeout=60)
+        c = read(dev, "ReceivedCount", "AcceptedCount", "DroppedUnlicensedCount",
+                 "DroppedQueueFullCount", "DroppedRateLimitCount", "PendingInformCount")
+        check(c["ReceivedCount"] == c["AcceptedCount"] == 10, f"post-restart accounting: {c}")
+        check(all(c[k] == 0 for k in ("DroppedUnlicensedCount", "DroppedQueueFullCount",
+                                      "DroppedRateLimitCount", "PendingInformCount")), f"dropped: {c}")
+        records = read_records()
+        check(len(records) == 10 and [r["sequence"] for r in records] == list(range(1, 11)),
+              f"missing, duplicate or out-of-order Records: {records}")
+        check(all(r["device"] == dev for r in records), "record attribution")
+        record_counts(dev)
+        evidence = ("PENDING staging notice observed" if "License 验证中" in hint else
+                    "PENDING window not observable; deterministic PENDING behavior is covered by "
+                    "SNMPDevicePendingLicenseTest, not this restart smoke")
+        return f"10 post-restart Traps -> 10 ordered Records, zero drops; {evidence}; {c}"
+    finally:
+        delete_device(dev)
+        clear_records()
+
+
 @case("record:thousand-fast")
 def record_thousand_fast():
     pdu = v2c_trap_pdu()

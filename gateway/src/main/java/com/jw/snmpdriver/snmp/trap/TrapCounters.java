@@ -10,6 +10,7 @@ public final class TrapCounters {
     private final AtomicLong droppedRateLimit = new AtomicLong();
     private final AtomicLong droppedQueueFull = new AtomicLong();
     private final AtomicLong droppedUnlicensed = new AtomicLong();
+    private final AtomicLong pendingInform = new AtomicLong();
     private final AtomicLong duplicateInform = new AtomicLong();
 
     /** Notifications routed to this Device after authentication. */
@@ -42,6 +43,15 @@ public final class TrapCounters {
     /** Retransmitted Informs that were ACKed again without being queued. */
     public long duplicateInform() {
         return duplicateInform.get();
+    }
+
+    /** Cumulative PENDING Inform attempts: not stored or ACKed; each retransmission counts again. */
+    public long pendingInform() {
+        return pendingInform.get();
+    }
+
+    void countPendingInform() {
+        pendingInform.incrementAndGet();
     }
 
     void countAccepted() {

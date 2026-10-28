@@ -47,7 +47,7 @@ Device 配置新增 `TRAP` 分类，字段如下（表单 Label 以 Gateway 界�
 
 ## 2. 新增章节：Traps 节点与 TRAP.* 路径
 
-`[Device]/Traps/` 节点：`Status`（`Disabled` / `Listening` / `Degraded` / `Unlicensed`）、`LastError`、`ListenerEndpoint`、`LocalEngineId`、`ReceivedCount`、`AcceptedCount`、`DroppedRateLimitCount`、`DroppedQueueFullCount`、`DroppedUnlicensedCount`、`AuthFailureCount`、`DuplicateInformCount`、`OverflowCount`、`ListenerUnmatchedCount`、`ListenerMultiMatchCount`，以及 Record Delivery 的 `RecordDeliveredCount`、`RecordHandlerErrorCount`、`RecordDroppedCount`、`RecordQueueDepth`（见 §14.6）。
+`[Device]/Traps/` 节点：`Status`（`Disabled` / `Listening` / `Degraded` / `Unlicensed`）、`LastError`、`ListenerEndpoint`、`LocalEngineId`、`ReceivedCount`、`AcceptedCount`、`DroppedRateLimitCount`、`DroppedQueueFullCount`、`DroppedUnlicensedCount`、`AuthFailureCount`、`DuplicateInformCount`、`PendingInformCount`、`OverflowCount`、`ListenerUnmatchedCount`、`ListenerMultiMatchCount`，以及 Record Delivery 的 `RecordDeliveredCount`、`RecordHandlerErrorCount`、`RecordDroppedCount`、`RecordQueueDepth`（见 §14.6）。
 
 `[Device]/Traps/Last/`：`Sequence`、`ReceivedTime`、`PduType`、`Version`、`TrapOid`、`Source`、`AgentAddress`（仅 v1）、`AgentUpTime`、`Varbinds`（JSON，最大 16 KiB）、`Json`（单值一致快照）。
 
@@ -202,6 +202,10 @@ v3 Inform 发送方可能因此报 `notInTimeWindow`，Gateway 侧计入 `AuthFa
 
 ## 11. License 行为
 
+- Gateway 启动后 License 尚在验证（PENDING）时，已认证且路由命中的 Trap 暂存在 listener 原有的 10 000 条接收队列内，与正常接收共用容量，保持到达顺序；`Traps/Status` 保持 `Listening`，首次暂存时 `LastError` 提示 License 验证中。此时不更新快照、不产生 Record。队列满时丢弃新到的 Trap，计入 `DroppedQueueFullCount`，`LastError` 说明接收队列已满。
+- 判定为 LICENSED 后，暂存 Trap 按到达顺序通过正常限速、快照更新与 Record Delivery；限速拒绝仍计入 `DroppedRateLimitCount`。判定为无效、过期或验证失败时，暂存 Trap 全部计入 `DroppedUnlicensedCount`，不产生 Record。暂存仅在内存中，Gateway/Device 停止不保证保留。
+- PENDING 期间 Inform 不 ACK、不暂存，也不计入 `DroppedUnlicensedCount`；累计的 `PendingInformCount` 记录这种未 ACK 的接收尝试（含每次重发），不是当前等待数。发送方需自行重发；License 判定为有效后，重发才走正常准入、去重和入队后 ACK（ADR 0004），不等待项目脚本。
+
 - License 无效时 Trap 端口保持打开；Trap 被丢弃并计入 `DroppedUnlicensedCount`，Inform 不 ACK，`Last/*` 不更新，`Traps/Status=Unlicensed`，`Last/*` 与 `TRAP.*` 质量为 `Bad_LicenseNotAvailable` 或 `Bad_LicenseExpired`。
 - License 恢复后自动恢复接收，无需重启。
 
@@ -215,7 +219,7 @@ v3 Inform 发送方可能因此报 `notInTimeWindow`，Gateway 侧计入 `AuthFa
 - 负载：50 台 v2c 设备 × 25 个 OID，1 s 轮询。
 - 2000 trap/s 持续 5 min：轮询 p95 延迟 0.90 → 0.96 ms（+6.9%），无超时，Trap 全部接受。
 - 10000 trap/s 突发 30 s：轮询 p95 延迟 0.90 → 1.35 ms（+49.9%，超过 20% 的目标），但无超时、无漏轮询，Trap 全部接受。增量绝对值仅 0.45 ms，且突发后无 Trap 时仍高 24.9%，主要是同机主机负载所致；负责人已接受该结果。
-- 所有进入模块的 Notification 都能对上账：`ReceivedCount = AcceptedCount + DroppedRateLimitCount + DroppedQueueFullCount + DroppedUnlicensedCount + DuplicateInformCount`。
+- 对已认证且格式有效的 Notification，在启用 Inform 接收且 v3 引擎身份正常、接收队列已排空时，对账为：`ReceivedCount = AcceptedCount + DroppedRateLimitCount + DroppedQueueFullCount + DroppedUnlicensedCount + DuplicateInformCount + PendingInformCount`。PENDING 暂存中或 worker 尚未交付的条数需要加在右侧；`PendingInformCount` 是累计未 ACK 尝试数，不等于发送方唯一 Inform 数。未启用 Inform 接收、v3 引擎身份不可用时另有未 ACK 的 Received，不能套用排空后的等式；认证失败不进入 Received。
 - 约 120000 trap/s 时队列会满：超出部分计入 `DroppedQueueFullCount`，Inform 不 ACK。更高的流量会在操作系统的 UDP 接收缓冲区被丢弃，这部分不出现在设备计数里，只能在系统层面（`netstat -su` 的 receive buffer errors）看到。
 - 堆内存全程在 290–890 MiB 之间正常波动，没有上升趋势。
 

@@ -26,7 +26,7 @@ import org.snmp4j.transport.DefaultUdpTransportMapping;
 /** Loopback v2c Traps into a real SNMPDevice on a hand-made Gateway, asserting the published Traps/ nodes. */
 class SNMPDeviceTrapNodesTest {
     private static final List<String> COUNTERS = List.of("ReceivedCount", "AcceptedCount", "DroppedRateLimitCount",
-            "DroppedQueueFullCount", "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount",
+            "DroppedQueueFullCount", "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount", "PendingInformCount",
             "ListenerUnmatchedCount", "ListenerMultiMatchCount", "RecordDeliveredCount", "RecordDroppedCount",
             "RecordQueueDepth");
     private static final List<String> LAST = List.of("Sequence", "ReceivedTime", "PduType", "Version", "TrapOid",

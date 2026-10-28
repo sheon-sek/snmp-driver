@@ -374,7 +374,7 @@ def check(cond, msg):
 
 def counters(device):
     return read(device, "ReceivedCount", "AcceptedCount", "AuthFailureCount", "DuplicateInformCount",
-                "DroppedUnlicensedCount", "ListenerUnmatchedCount", "ListenerMultiMatchCount", "Last/Sequence")
+                "DroppedUnlicensedCount", "PendingInformCount", "ListenerUnmatchedCount", "ListenerMultiMatchCount", "Last/Sequence")
 
 
 def delta(before, after):
