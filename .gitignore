@@ -285,3 +285,6 @@ _references/
 
 # local scratch (dev builds, license bypass patch)
 .scratch/
+
+# Jython cache written by unit tests
+gateway/.jython_cache/

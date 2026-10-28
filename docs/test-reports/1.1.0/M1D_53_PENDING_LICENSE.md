@@ -80,3 +80,42 @@ RecordQueueDepth 属于接受后的独立 Record 投递层，不是 PENDING 暂�
 merger 需要串行运行新增用例及全量系统测试，并记录真实 PENDING 是否可观察；
 本报告不宣称系统验收完成。
 v1/v3 各安全级别的 PENDING 专项未单独运行，共享暂存逻辑由 v2c Fixture 覆盖，现有协议单元回归覆盖正常安全与路由路径。
+
+## 集成验收（merger）
+
+日期：2026-10-28。环境：WSL Ubuntu-24.04、Ignition 8.3.10、igdev Gateway。
+
+### 合并与单元测试
+
+- 集成分支 `m1d/release`：`git merge --no-ff feat/53`（`abd6617`），合并提交 `d631284`，无冲突。
+- repo root 执行 `bash ./gradlew :base:test :gateway:test --console=plain`：BUILD SUCCESSFUL（2 分 41 秒），JUnit XML 合计 base 13、gateway 340，失败/错误/跳过均为 0。
+- 单测在 `gateway/.jython_cache/` 生成的缓存已移入忽略的 `.scratch`；按负责人同意在 `.gitignore` 增加该路径。
+
+### 开发构建
+
+- 当前源码复制到忽略的 `.scratch/devbuild-53`，只在副本应用 `.scratch/license-bypass.patch`，安装文件名 `com.jw.snmpdriver-1.1.0-m53-dev.unsigned.modl`（未签名，仅开发测试）。
+- 为制造可观察的 PENDING，副本中另加一个仅开发用的判定延迟：Gateway 数据目录存在 `snmpdriver-dev-pending-ms` 文件时，License 服务创建后该毫秒数内 `currentStatus()` 返回 `UNVERIFIED`；文件不存在时与普通 bypass 构建相同。该改动只在 `.scratch` 副本中，正式源码与提交不含 bypass 或延迟。
+- igdev 更换模块文件名时出现已知旧 mount 错误，用 `st.recreate_gateway` 保留数据卷重建容器，`st.pin_gateway_identity` 固定 MAC `02:42:ac:12:00:62`；模块 ACTIVE 后开始测试。
+
+### 系统测试
+
+| 运行 | 结果 | 结果文件（忽略的运行产物） |
+|---|---|---|
+| `restart:license-pending-traps`，延迟文件 30000 ms | 1/1 通过，68.4 s，**观察到 PENDING 暂存提示** | `system-test/out/results-20261028T115516.json` |
+| `st.py run record`（全部 `record:*`） | 11/11 通过，137.2 s | `system-test/out/results-20261028T115744.json` |
+| `st.py run` 全量（无延迟文件） | 61/61 通过，用例耗时合计 1014.0 s | `system-test/out/results-20261028T121438.json` |
+
+真实 PENDING 时间线（Gateway 日志）：03:54:40 License 服务创建并进入 30 s UNVERIFIED；03:54:48 Device 启动、listener Listening 后立即发 10 条 Trap，`LastError` 含“License 验证中”；03:55:10 判定 LICENSED 后暂存 Trap 按序放行。
+结果：Received=Accepted=RecordDelivered=10，Record 序号 1..10 有序，DroppedUnlicensed、DroppedQueueFull、DroppedRateLimit、PendingInform 均为 0。
+
+全量中同一用例在无延迟文件时返回“PENDING window not observable”，即 bypass 直接 LICENSED 的重启 smoke，同样 10 条全部接受、零丢弃。
+
+其他关键数据：1000 条 Trap → 1000 次调用有序；容量 100 + 慢函数 Accepted=150、Delivered=101、Dropped=49（保留 1–101），对账成立；热更新首次 v2 为导入开始后 2.173 s（record 集）/ 2.758 s（全量），之后无回退；Gateway 重启 engineBoots 2→3、engineID 保持；端口占用解除后 23 s 恢复。
+
+系统层未单独发 PENDING 期间的 Inform 与无效判定（需要可控的无效 License），这两种转移由 `SNMPDevicePendingLicenseTest` 覆盖。
+
+### 集成问题与清理
+
+未发现集成问题，除 `.gitignore` 与本报告外没有新增运行时修改。
+测试后删除全部测试设备（设备列表 `[]`）、`st-records` 恢复 normal 处理函数、sink 清空（`[]`）、延迟文件已删除；`igdev gateway ensure` 成功，OPC UA 可访问，MAC `02:42:ac:12:00:62`。
+本验收只证明开发 bypass 构建下的功能回归，不作为正式 License 或生产签名 artifact 验收。
