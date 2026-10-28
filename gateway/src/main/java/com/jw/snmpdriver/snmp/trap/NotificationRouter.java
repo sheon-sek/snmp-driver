@@ -25,7 +25,7 @@ import org.snmp4j.smi.VariableBinding;
 
 /**
  * Routes one Listener's Notifications to the Devices that own the source address. O(1) per packet,
- * lock-free, and never throws into the transport thread.
+ * with bounded in-memory delivery, and never throws into the transport thread.
  */
 final class NotificationRouter implements NotificationHandler, AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(NotificationRouter.class);
@@ -39,6 +39,8 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
     private final BlockingQueue<Delivery> queue;
     private final Thread worker;
     private volatile boolean closed;
+    /** Guarded by queue; staged deliveries have not consumed a rate-limit token yet. */
+    private int staged;
     private final List<TrapRecipient> recipients = new CopyOnWriteArrayList<>();
     private final AtomicLong unmatched = new AtomicLong();
     private final AtomicLong multiMatch = new AtomicLong();
@@ -80,15 +82,19 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
 
     @Override
     public void close() {
-        closed = true;
+        synchronized (queue) {
+            closed = true;
+            queue.clear();
+            staged = 0;
+            queue.notifyAll();
+        }
         worker.interrupt();
-        queue.clear();
     }
 
     private void drain() {
         try {
             while (!Thread.currentThread().isInterrupted()) {
-                Delivery delivery = queue.take();
+                Delivery delivery = nextDelivery();
                 // a Device removed or reconfigured since the offer is a different recipient: drop silently
                 if (!recipients.contains(delivery.recipient())) {
                     continue;
@@ -106,7 +112,46 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
         }
     }
 
-    private record Delivery(TrapRecipient recipient, TrapNotification notification) {
+    /**
+     * Keep a PENDING Trap inside the bounded queue until a verdict exists. No worker-held extra slot,
+     * and fresh Traps cannot overtake staged ones at either the limiter or the Device sink.
+     */
+    private Delivery nextDelivery() throws InterruptedException {
+        synchronized (queue) {
+            while (true) {
+                Delivery head = queue.peek();
+                if (head == null) {
+                    queue.wait();
+                    continue;
+                }
+                if (!recipients.contains(head.recipient())) {
+                    queue.remove();
+                    if (head.staged()) staged--;
+                    continue;
+                }
+                LicenseGate.Verdict verdict = head.staged() ? license.get() : null;
+                if (verdict == LicenseGate.Verdict.PENDING) {
+                    queue.wait(50);
+                    continue;
+                }
+                queue.remove();
+                if (head.staged()) {
+                    staged--;
+                    if (verdict != LicenseGate.Verdict.LICENSED) {
+                        head.recipient().counters().countDroppedUnlicensed();
+                        continue;
+                    }
+                    if (!head.recipient().limiter().tryAcquire()) {
+                        head.recipient().counters().countDroppedRateLimit();
+                        continue;
+                    }
+                }
+                return head;
+            }
+        }
+    }
+
+    private record Delivery(TrapRecipient recipient, TrapNotification notification, boolean staged) {
     }
 
     void add(TrapRecipient recipient) {
@@ -183,6 +228,8 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
                 recipient.counters().countReceived();
                 if (incoming.ack() == null) {
                     admit(recipient, notification);
+                } else if (license.get() == LicenseGate.Verdict.PENDING) {
+                    recipient.counters().countPendingInform();
                 } else if (incoming.version() == TrapNotification.Version.V3 && v3InformUnavailable != null) {
                     // the sender retries; ACKing under an identity that cannot be kept would break RFC 3414
                     recipient.notice().accept(v3InformUnavailable);
@@ -293,7 +340,12 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
      * never mistaken for a duplicate when the sender retries (ADR 0004).
      */
     private boolean admitInform(TrapRecipient recipient, IncomingNotification incoming, TrapNotification notification) {
-        if (license.get() != LicenseGate.Verdict.LICENSED) {
+        LicenseGate.Verdict verdict = license.get();
+        if (verdict == LicenseGate.Verdict.PENDING) {
+            recipient.counters().countPendingInform();
+            return false;
+        }
+        if (verdict != LicenseGate.Verdict.LICENSED) {
             recipient.counters().countDroppedUnlicensed();
             return false;
         }
@@ -324,31 +376,42 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
     }
 
     private void admit(TrapRecipient recipient, TrapNotification notification) {
-        if (license.get() != LicenseGate.Verdict.LICENSED) {
+        LicenseGate.Verdict verdict = license.get();
+        if (verdict != LicenseGate.Verdict.LICENSED && verdict != LicenseGate.Verdict.PENDING) {
             recipient.counters().countDroppedUnlicensed();
             return;
         }
-        enqueue(recipient, notification);
+        boolean pending = verdict == LicenseGate.Verdict.PENDING;
+        if (offer(recipient, notification, pending, true) && pending) {
+            recipient.notice().accept("License 验证中，Trap 暂存；Inform 不 ACK，请等待发送方重发。");
+        }
     }
 
-    /** The Device's rate limit, then the shared queue; every refusal has its own counter. */
+    /** Inform must pass the limiter and enqueue before ACK, even when staged Traps are waiting. */
     private boolean enqueue(TrapRecipient recipient, TrapNotification notification) {
-        if (!recipient.limiter().tryAcquire()) {
-            recipient.counters().countDroppedRateLimit();
-            return false;
+        return offer(recipient, notification, false, false);
+    }
+
+    private boolean offer(TrapRecipient recipient, TrapNotification notification, boolean pending, boolean trap) {
+        boolean full;
+        synchronized (queue) {
+            if (closed) return false;
+            boolean stage = pending || (trap && staged > 0);
+            if (!stage && !recipient.limiter().tryAcquire()) {
+                recipient.counters().countDroppedRateLimit();
+                return false;
+            }
+            full = !queue.offer(new Delivery(recipient, notification, stage));
+            if (!full) {
+                if (stage) staged++;
+                queue.notifyAll();
+            }
         }
-        if (closed) {
-            return false;
-        }
-        if (!queue.offer(new Delivery(recipient, notification))) {
+        if (full) {
             recipient.counters().countDroppedQueueFull();
-            return false;
+            recipient.notice().accept("Notification 接收队列已满（含 License 验证期间暂存的 Trap），新到的 Notification 已丢弃。");
         }
-        if (closed) {
-            // close() raced with the offer: nothing will drain it
-            queue.clear();
-        }
-        return true;
+        return !full;
     }
 
     int queued() {

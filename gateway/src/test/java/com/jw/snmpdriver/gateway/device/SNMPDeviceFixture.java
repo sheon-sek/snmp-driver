@@ -238,14 +238,23 @@ final class SNMPDeviceFixture implements AutoCloseable {
     }
 
     /** Swaps the cached License status that {@code ServiceBundle.licenseVerdict()} reads. */
-    @SuppressWarnings("unchecked")
     void license(boolean licensed) throws Exception {
+        license(licensed ? LicenseStatusCode.LICENSED : LicenseStatusCode.MISSING_FILE);
+    }
+
+    @SuppressWarnings("unchecked")
+    void license(LicenseStatusCode code) throws Exception {
         Field current = com.jw.ignition.license.state.CachedLicenseState.class.getDeclaredField("current");
         current.setAccessible(true);
         LicenseStatusModel status = new LicenseStatusModel();
-        status.licensed = licensed;
-        status.code = licensed ? LicenseStatusCode.LICENSED : LicenseStatusCode.MISSING_FILE;
+        status.licensed = code == LicenseStatusCode.LICENSED;
+        status.code = code;
         ((AtomicReference<LicenseStatusModel>) current.get(bundle.license().service().cachedState())).set(status);
+    }
+
+    /** Startup validation has not reached a verdict yet. */
+    void pendingLicense() throws Exception {
+        license(LicenseStatusCode.UNVERIFIED);
     }
 
     @Override

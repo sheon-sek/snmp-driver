@@ -69,3 +69,22 @@ SDK 实测由临时项目从普通 Java 线程调用上述函数完成，正常�
 
 #51 集成实测：修正版 Record 集首次观察 v2 为导入开始后 1.767 s；之后三条保持 v2，序号连续。该时间包含导入命令、发包和读 sink 开销。
 全量 60/60 回归中同一观测延迟为 4.385 s；这两次数据不构成固定延迟保证。
+
+
+## #53 License PENDING
+
+新增 `restart:license-pending-traps`：Gateway 重启后，在确认 listener Listening 的第一时间发送 10 条 Trap，
+要求 Received=Accepted=RecordDelivered=10、序号 1..10、所有丢弃计数为零。
+返回值明确记录是否观察到“License 验证中”暂存提示；未观察到时只算重启 smoke，不宣称覆盖 PENDING。
+现有生产构建没有可控的 License 验证延迟，bypass 构建也可能直接返回 LICENSED；
+需要 merger 在隔离的开发构建中制造判定延迟，或明确使用下面的确定性 JUnit 证据。
+
+`SNMPDevicePendingLicenseTest` 使用真实 UDP listener、Device、快照与 Record Delivery，仅控制 License 状态及项目函数外部边界：
+暂存后放行并保持 payload/Record 顺序、判无效全部丢弃、原有 10 000 条队列溢出、
+Inform PENDING 不 ACK/不暂存且有效后重发正常接受，均在此层验证。
+`PendingInformCount` 记录未 ACK 的 PENDING Inform 尝试，`ReceivedCount` 按接收尝试计数；
+队列排空后 Received 等于 Accepted、三种 Dropped、DuplicateInform 和 PendingInform 之和。
+暂存中的 Trap 尚无终态，暂存条数要加到等式右侧。
+
+本 implementer 只编写系统用例并做 Python 语法检查，不访问 igdev Gateway，也未运行定向或全量系统回归；
+由 merger 串行执行 `python3 system-test/st.py run restart:license-pending-traps` 和全量回归。

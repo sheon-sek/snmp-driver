@@ -97,7 +97,7 @@ public final class TrapDiagnostics {
         NODES.put(LISTENER_ENDPOINT, NodeType.STRING);
         NODES.put(LOCAL_ENGINE_ID, NodeType.STRING);
         for (String name : new String[] {"ReceivedCount", "AcceptedCount", "DroppedRateLimitCount",
-                "DroppedQueueFullCount", "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount",
+                "DroppedQueueFullCount", "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount", "PendingInformCount",
                 "ListenerUnmatchedCount", "ListenerMultiMatchCount"}) {
             NODES.put(name, NodeType.UINT64);
         }
@@ -205,6 +205,7 @@ public final class TrapDiagnostics {
         sources.put("DroppedUnlicensedCount", counters::droppedUnlicensed);
         sources.put("AuthFailureCount", counters::authFailure);
         sources.put("DuplicateInformCount", counters::duplicateInform);
+        sources.put("PendingInformCount", counters::pendingInform);
         sources.put("ListenerUnmatchedCount", () -> diagnostics.listenerCount(false));
         sources.put("ListenerMultiMatchCount", () -> diagnostics.listenerCount(true));
         sources.put(OVERFLOW_COUNT, diagnostics.oidStates::overflowCount);
