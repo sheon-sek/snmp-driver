@@ -321,13 +321,15 @@ def onNotification(record):
 | 情况 | 结果 | 计数 |
 |---|---|---|
 | 函数正常返回 | 已投递 | `RecordDeliveredCount` +1 |
-| 函数抛出异常 | 不重试，继续处理下一条；每条记一条 warn 日志（含 Device、Sequence、Project、Function 和异常摘要），写入 `Traps/LastError` | `RecordHandlerErrorCount` +1 |
+| 函数抛出异常 | 不重试，继续处理下一条；写入 `Traps/LastError`；记 warn 日志（含 Device、Sequence、Project、Function 和异常摘要），连续相同的异常只记一次，调用成功后重置 | `RecordHandlerErrorCount` +1 |
 | 队列已满（达到 `Record Queue Capacity`） | 丢弃新到的 Record，已在队列中的保留；`LastError` 写明容量和首个丢弃的 sequence | `RecordDroppedCount` +1 |
 | 项目不存在、已禁用或为 inheritable；函数不存在、不是函数，或 Script Library 有语法错误 | 该条丢弃；`LastError` 指出项目或函数；同一错误日志只记一次。问题修复后下一条自动恢复 | `RecordDroppedCount` +1 |
 | Device 停止或重建时队列中未处理的 Record | 丢弃 | `RecordDroppedCount` |
 | Gateway 启动/停止期间投递线程不可用 | 丢弃 | `RecordDroppedCount` |
 
 另外需写明：
+
+- **`LastError` 中的 Record 错误在下一次成功调用后清除**；计数不清零。
 
 - **没有硬超时**：模块不会中断正在执行的函数。单次调用超过 5 秒时，在该次调用结束后记一条 warn 日志 `Slow record handler call ... elapsedMillis=...`。慢函数的影响通过 `RecordQueueDepth` 和这条日志观察。
 - **Inform ACK 不等函数**：Inform 在进入接收队列后即 ACK（与 1.1.0 其他行为一致），不等处理函数执行；函数慢或出错不会导致发送方重发。

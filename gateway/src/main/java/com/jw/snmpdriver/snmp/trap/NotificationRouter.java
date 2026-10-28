@@ -279,8 +279,10 @@ final class NotificationRouter implements NotificationHandler, AutoCloseable {
                     "安全级别与设备配置的 Security Level 不一致。";
             case SnmpConstants.SNMPv3_USM_AUTHENTICATION_FAILURE, SnmpConstants.SNMPv3_USM_AUTHENTICATION_ERROR ->
                     "认证摘要不匹配。请检查 Auth Protocol 与 Auth Passphrase。";
-            case SnmpConstants.SNMPv3_USM_DECRYPTION_ERROR, SnmpConstants.SNMPv3_USM_PARSE_ERROR ->
+            case SnmpConstants.SNMPv3_USM_DECRYPTION_ERROR ->
                     "认证通过但解密失败。请检查 Privacy Protocol 与 Privacy Passphrase。";
+            case SnmpConstants.SNMPv3_USM_PARSE_ERROR ->
+                    "USM 安全参数无法解析，可能是报文格式错误或发送方 SNMP 实现与本驱动不兼容。";
             default -> "USM 拒绝（status=" + status + "）。";
         };
     }

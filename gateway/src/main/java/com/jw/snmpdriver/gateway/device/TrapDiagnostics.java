@@ -151,13 +151,17 @@ public final class TrapDiagnostics {
     private volatile StatusCode lastQuality;
     private TrapListenerHandle handle;
     private boolean nodesCreated;
+    /** Receive-path notice shown while Listening; cleared by the next status publish. */
     private String lastNotice;
+    /** Reason of the last published status; LastError is rebuilt from it when a notice or Record error changes. */
+    private String statusError = "";
+    private boolean disabled = true;
     /** Gateway-wide engine identity hint (clone, corrupt file, write failure); appended to every LastError. */
     private String identityNotice = "";
     /** Standing configuration limit (e.g. no v3 Trap without a sender engineID); hidden while Disabled. */
     private String configNotice = "";
     private String engineIdHex = "";
-    private Supplier<String> recordError = () -> "";
+    private final Supplier<String> recordError;
     private String lastRecordError = "";
     private NodeWriter writer;
 
@@ -171,9 +175,16 @@ public final class TrapDiagnostics {
 
     TrapDiagnostics(BiConsumer<String, Object> sink, Supplier<LicenseGate.Verdict> license,
                     Map<String, LongSupplier> counterSources) {
+        this(sink, license, counterSources, () -> "");
+    }
+
+    /** {@code recordError} is the Device's current Record Delivery problem, appended to {@code LastError}. */
+    TrapDiagnostics(BiConsumer<String, Object> sink, Supplier<LicenseGate.Verdict> license,
+                    Map<String, LongSupplier> counterSources, Supplier<String> recordError) {
         this.sink = sink;
         this.license = license;
         this.counterSources = counterSources;
+        this.recordError = recordError;
     }
 
     /**
@@ -185,7 +196,8 @@ public final class TrapDiagnostics {
                                            RecordDelivery delivery) {
         NodeWriter writer = new NodeWriter(addressSpace, context);
         Map<String, LongSupplier> sources = new LinkedHashMap<>();
-        TrapDiagnostics diagnostics = new TrapDiagnostics(writer::set, license, sources);
+        TrapDiagnostics diagnostics = new TrapDiagnostics(writer::set, license, sources,
+                () -> delivery == null ? "" : delivery.lastError());
         sources.put("ReceivedCount", counters::received);
         sources.put("AcceptedCount", counters::accepted);
         sources.put("DroppedRateLimitCount", counters::droppedRateLimit);
@@ -200,7 +212,6 @@ public final class TrapDiagnostics {
         sources.put(RECORD_HANDLER_ERROR_COUNT, () -> delivery == null ? 0 : delivery.handlerErrorCount());
         sources.put(RECORD_DROPPED_COUNT, () -> delivery == null ? 0 : delivery.droppedCount());
         sources.put(RECORD_QUEUE_DEPTH, () -> delivery == null ? 0 : delivery.queueDepth());
-        diagnostics.recordError = () -> delivery == null ? "" : delivery.lastError();
         diagnostics.writer = writer;
         return diagnostics;
     }
@@ -277,10 +288,9 @@ public final class TrapDiagnostics {
 
     /** Writes the counters whose value changed since the last flush; driven once per second. */
     public synchronized void flushCounters() {
-        String error = recordError.get();
-        if (!error.equals(lastRecordError)) {
-            lastRecordError = error;
-            refresh();
+        if (!recordError.get().equals(lastRecordError)) {
+            // only LastError changes: the status and any receive notice stay as they are
+            publishLastError();
         }
         counterSources.forEach((name, source) -> {
             long value = source.getAsLong();
@@ -408,11 +418,13 @@ public final class TrapDiagnostics {
             return;
         }
         lastNotice = message;
-        sink.accept(LAST_ERROR, join(join(message, identityNotice), recordError.get()));
+        publishLastError();
     }
 
     private void publish(Status status, String error, String endpoint) {
         lastNotice = null;
+        statusError = error;
+        disabled = status == Status.DISABLED;
         // Quality follows the License alone; Status still lets Degraded outrank Unlicensed
         applyLastQuality(switch (license.get()) {
             case LICENSED -> null;
@@ -421,9 +433,19 @@ public final class TrapDiagnostics {
             case NOT_AVAILABLE -> new StatusCode(StatusCodes.Bad_LicenseNotAvailable);
         });
         sink.accept(STATUS, status.text);
-        String notice = join(join(error, status == Status.DISABLED ? "" : configNotice), identityNotice);
-        sink.accept(LAST_ERROR, join(notice, recordError.get()));
+        publishLastError();
         sink.accept(LISTENER_ENDPOINT, endpoint);
+    }
+
+    /**
+     * LastError = status reason, receive notice, configuration notice (not while Disabled), engine identity notice
+     * and Record Delivery problem, each only when present; every writer goes through here.
+     */
+    private void publishLastError() {
+        lastRecordError = recordError.get();
+        String text = join(statusError, lastNotice == null ? "" : lastNotice);
+        text = join(join(text, disabled ? "" : configNotice), identityNotice);
+        sink.accept(LAST_ERROR, join(text, lastRecordError));
     }
 
     private static String join(String first, String second) {

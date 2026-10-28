@@ -194,13 +194,15 @@ class SNMPDeviceRecordDeliveryTest {
         await("Listening", () -> "Listening".equals(fixture.value("Status")));
         sendV2cTrap(fixture.trapPort, 1);
         await("handler error", () -> Unsigned.ulong(1).equals(fixture.value("RecordHandlerErrorCount")));
+        await("error shown", () -> ((String) fixture.value("LastError")).contains("ST_HANDLER_BROKEN"));
         sendV2cTrap(fixture.trapPort, 2);
         await("next delivery", () -> Unsigned.ulong(1).equals(fixture.value("RecordDeliveredCount")));
         assertEquals(List.of(1L, 2L), calls);
         assertEquals(Unsigned.ulong(2), fixture.value("AcceptedCount"));
         assertEquals(Unsigned.ulong(0), fixture.value("RecordDroppedCount"));
         assertEquals(Unsigned.ulong(0), fixture.value("RecordQueueDepth"));
-        assertTrue(((String) fixture.value("LastError")).contains("ST_HANDLER_BROKEN"));
+        // a successful delivery clears the Record error from Traps/LastError
+        await("error cleared", () -> "".equals(fixture.value("LastError")));
     }
 
     @Test
