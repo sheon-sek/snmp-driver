@@ -56,12 +56,12 @@ public record SNMPDeviceConfig(
         @FormCategory("TRAP") @Label("Trap Port* (Linux: use 10162 and redirect UDP 162 with nftables)")
         @FormField(FormFieldType.NUMBER)
         @DefaultValue("162") @Required int trapPort,
-        @FormCategory("TRAP") @Label("Trap Security* (USM requires SNMP Version V3)") @FormField(FormFieldType.SELECT)
+        @FormCategory("TRAP") @Label("Trap Security* (COMMUNITY: accept v1/v2c only; USM: accept v3 only, uses the V3 Security user, requires SNMP Version V3)") @FormField(FormFieldType.SELECT)
         @DefaultValue("COMMUNITY") @Required TrapSecurity trapSecurity,
-        @FormCategory("TRAP") @Label("Trap Community (COMMUNITY mode; empty uses Read Community)")
+        @FormCategory("TRAP") @Label("Trap Community (COMMUNITY mode only; empty uses Read Community)")
         @FormField(FormFieldType.SECRET)
         @DefaultValue("null") @IsNullable SecretConfig trapCommunity,
-        @FormCategory("TRAP") @Label("Trap Sender Engine ID (V3 only; hex, 5-32 bytes; required to receive V3 Traps)")
+        @FormCategory("TRAP") @Label("Trap Sender Engine ID (USM mode only; sender's snmpEngineID, hex 5-32 bytes; required for v3 Traps, not for v3 Informs)")
         @FormField(FormFieldType.TEXT)
         @DefaultValue("") String trapSenderEngineId,
         @FormCategory("TRAP") @Label("Accept Inform") @FormField(FormFieldType.CHECKBOX)

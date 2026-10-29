@@ -31,15 +31,17 @@ Device 配置新增 `TRAP` 分类，字段如下（表单 Label 以 Gateway 界�
 | Trap Enabled | `trapEnabled` | 关闭 | 关闭时不占用端口 |
 | Trap Bind Address | `trapBindAddress` | `0.0.0.0` | 只接受 IP 字面量；同一端口上第一个 Device 决定 listener 的地址 |
 | Trap Port | `trapPort` | `162` | 见 §9 端口指引 |
-| Trap Security | `trapSecurity` | `COMMUNITY` | `USM` 要求 SNMP Version 为 V3，并沿用 `V3_SECURITY` 分类的用户与口令 |
+| Trap Security | `trapSecurity` | `COMMUNITY` | 二选一：`COMMUNITY` 只接收 v1/v2c，v3 报文丢弃；`USM` 只接收 v3，v1/v2c 报文丢弃。`USM` 要求 SNMP Version 为 V3，并沿用 `V3_SECURITY` 分类的用户与口令（Trap 分类没有单独的 v3 安全参数） |
 | Trap Community | `trapCommunity` | 空 | COMMUNITY 模式使用；为空时沿用 Read Community |
-| Trap Sender Engine ID | `trapSenderEngineId` | 空 | 仅 V3；hex，5–32 字节；接收 v3 Trap 必填，见 §8。可直接粘贴工具输出的格式（空格、冒号分隔或 `0x` 前缀）；只在 Trap 开启且 Trap Security 为 USM 时校验 |
+| Trap Sender Engine ID | `trapSenderEngineId` | 空 | 仅 USM 模式；填发送设备自己的 snmpEngineID，v3 Inform 不需要；hex，5–32 字节；接收 v3 Trap 必填，见 §8。可直接粘贴工具输出的格式（空格、冒号分隔或 `0x` 前缀）；只在 Trap 开启且 Trap Security 为 USM 时校验 |
 | Accept Inform | `trapAcceptInform` | 开启 | |
 | Trap Source Allowlist | `trapSourceAllowlist` | 空 | 逗号分隔 IP/CIDR，追加 Device Host 之外的来源地址 |
 | Trap Rate Limit per Second | `trapRateLimitPerSecond` | `100` | 1–10000，突发上限为 2 倍 |
 
 需写明：
 
+- Trap Security 决定该 Device 接收哪种版本的报文，一个 Device 只能选一种；另一种版本的报文被丢弃，不进入 Tag 或处理函数。v3 Trap 的用户名、安全等级、认证/加密协议与口令在 `V3_SECURITY` 分类填写，与轮询共用。
+- 对接 v3 Trap 需要对方提供：安全等级、用户名、认证协议与口令、加密协议与口令（authPriv 时）、设备 Engine ID（仅 Trap 需要，Inform 不需要）。
 - 同一端口上的多个 Device 共享一个 Trap Listener，`Trap Bind Address` 必须一致；不一致的 Device `Traps/Status=Degraded`。
 - 同一 listener 上相同 Security Name 的 v3 用户必须使用相同口令和协议，冲突的 Device 全部 Degraded，`LastError` 列出冲突设备名（运行期检查，不阻止保存）。
 - 只发 Trap、不需要轮询的设备，也按普通 Device 配置，不建 Tag 即可。
