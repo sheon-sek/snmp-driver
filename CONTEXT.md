@@ -39,3 +39,11 @@ _Avoid_: orphan trap
 **Notification Snapshot**:
 Device 上暴露的 Notification 状态：计数器加最近一条的内容，不是逐条事件记录。
 _Avoid_: trap log、trap history
+
+**Notification Record**:
+一条被某个 Device 接受的 Notification 的原始内容，带该 Device 内递增的序号；一条 Notification 命中多个 Device 时每个 Device 各有一条。只含原始字段，不含任何解析结果。
+_Avoid_: trap event、trap message
+
+**Record Delivery**:
+把每条 Notification Record 交给工程师在 Designer 中编写的处理逻辑各一次。只保证 Gateway 进程运行期间不丢；无法投递时丢弃并计数，序号断档可见。
+_Avoid_: trap forwarding、event publishing

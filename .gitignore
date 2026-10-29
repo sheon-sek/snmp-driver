@@ -279,3 +279,12 @@ CLAUDE.md
 # _docs/
 _templates/
 _references/
+
+# igdev: disposable checkout state (managed entry, do not edit)
+.igdev/
+
+# local scratch (dev builds, license bypass patch)
+.scratch/
+
+# Jython cache written by unit tests
+gateway/.jython_cache/

@@ -36,8 +36,8 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
     }
 
     /**
-     * 1.0.0 配置没有 trap* 字段；record 缺字段只得 0/false/null，所以只为缺失的 trap* 补默认值，
-     * 显式给出的值（包括非法值）原样保留，交给 {@link #validate}。
+     * 1.0.0 配置没有 trap* 字段，1.1.0 早期配置没有 recordHandler* 字段；record 缺字段只得 0/false/null，
+     * 所以只为缺失的这两组字段补默认值，显式给出的值（包括非法值）原样保留，交给 {@link #validate}。
      */
     @Override
     public SNMPDeviceConfig decode(JsonElement json) throws DecodingException {
@@ -46,7 +46,8 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
             JsonObject defaults = encode(SNMPDeviceConfig.defaults()).getAsJsonObject();
             for (RecordComponent component : SNMPDeviceConfig.class.getRecordComponents()) {
                 String name = component.getName();
-                if (name.startsWith("trap") && !object.has(name) && defaults.has(name)) {
+                boolean defaulted = name.startsWith("trap") || name.startsWith("record");
+                if (defaulted && !object.has(name) && defaults.has(name)) {
                     object.add(name, defaults.get(name));
                 }
             }
@@ -149,12 +150,30 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
         errors.checkField(config.trapPort() >= 1 && config.trapPort() <= 65_535,
                 "trapPort", "Trap port must be 1-65535.");
         errors.requireNotNull("trapSecurity", config.trapSecurity());
-        errors.checkField(isValidEngineId(config.trapSenderEngineId()),
-                "trapSenderEngineId", "Trap sender engine ID must be 10-64 hex digits (5-32 bytes).");
+        // only USM Traps use it; a stale value must not block saving unrelated changes
+        if (config.trapEnabled() && config.trapSecurity() == SNMPDeviceConfig.TrapSecurity.USM) {
+            errors.checkField(isValidEngineId(config.trapSenderEngineId()), "trapSenderEngineId",
+                    "Trap sender engine ID must be 10-64 hex digits (5-32 bytes); spaces, colons and 0x are allowed.");
+        }
         errors.checkField(isValidAllowlist(config.trapSourceAllowlist()),
                 "trapSourceAllowlist", "Trap source allowlist must be comma-separated IP addresses or CIDR ranges.");
         errors.checkField(config.trapRateLimitPerSecond() >= 1 && config.trapRateLimitPerSecond() <= 10_000,
                 "trapRateLimitPerSecond", "Trap rate limit must be 1-10000 per second.");
+        // only the format: whether the project and function exist is checked at runtime (ADR 0007)
+        String function = config.recordHandlerFunction();
+        boolean hasFunction = function != null && !function.isBlank();
+        boolean hasProject = config.recordHandlerProject() != null && !config.recordHandlerProject().isBlank();
+        errors.checkField(!hasFunction || hasProject, "recordHandlerProject",
+                "Set Record Handler Project together with Record Handler Function, or leave both empty.");
+        errors.checkField(!hasProject || hasFunction, "recordHandlerFunction",
+                "Set Record Handler Function together with Record Handler Project, or leave both empty.");
+        errors.checkField(function == null || function.isBlank()
+                        || SNMPDeviceConfig.isValidRecordHandlerFunction(function),
+                "recordHandlerFunction",
+                "Record handler function must be a dotted Script Library path such as snmp.handlers.onNotification.");
+        errors.checkField(config.recordQueueCapacity() >= SNMPDeviceConfig.MIN_RECORD_QUEUE_CAPACITY
+                        && config.recordQueueCapacity() <= SNMPDeviceConfig.MAX_RECORD_QUEUE_CAPACITY,
+                "recordQueueCapacity", "Record queue capacity must be 100-100000.");
 
         if (!config.trapEnabled()) {
             return;
@@ -169,10 +188,11 @@ public final class SNMPDeviceExtensionPoint extends DeviceExtensionPoint<SNMPDev
     }
 
     private static boolean isValidEngineId(String engineId) {
-        if (engineId == null || engineId.isEmpty()) {
+        if (engineId == null || engineId.isBlank()) {
             return true;
         }
-        return engineId.matches("[0-9a-fA-F]{10,64}") && engineId.length() % 2 == 0;
+        String hex = SNMPDeviceConfig.normalizeEngineId(engineId);
+        return hex.matches("[0-9a-fA-F]{10,64}") && hex.length() % 2 == 0;
     }
 
     private static boolean isValidAllowlist(String allowlist) {

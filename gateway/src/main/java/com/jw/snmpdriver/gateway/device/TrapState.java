@@ -58,6 +58,16 @@ final class TrapState {
         return snapshot;
     }
 
+    /** Notification Record (ADR 0010): the snapshot's {@code Last/Json} with a leading {@code device} field. */
+    static String recordJson(String device, Snapshot snapshot) {
+        String json = snapshot.json();
+        // the snapshot before any Notification has no JSON; never emit a dangling comma
+        if (!json.startsWith("{") || json.equals("{}")) {
+            return "{\"device\":" + quote(device) + "}";
+        }
+        return "{\"device\":" + quote(device) + "," + json.substring(1);
+    }
+
     private static String varbindsJson(List<VariableBinding> varbinds, boolean alreadyTruncated) {
         StringBuilder text = new StringBuilder("[");
         boolean truncated = alreadyTruncated;

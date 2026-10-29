@@ -64,6 +64,14 @@ public final class LicensedSnmpRequestClient implements SnmpRequestClient {
         if (verdict == LicenseGate.Verdict.LICENSED) {
             return;
         }
+        if (verdict == LicenseGate.Verdict.PENDING) {
+            // Not a License failure: Status must not flash Unlicensed while startup verification runs
+            throw new SnmpValueException(
+                    StatusCodes.Bad_WaitingForInitialData,
+                    "license-pending",
+                    "SNMP operation deferred until SNMP Driver license verification completes"
+            );
+        }
         boolean expired = verdict == LicenseGate.Verdict.EXPIRED;
         throw new SnmpLicenseException(
                 expired

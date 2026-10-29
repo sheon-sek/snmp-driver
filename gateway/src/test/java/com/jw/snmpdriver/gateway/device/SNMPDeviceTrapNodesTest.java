@@ -26,8 +26,9 @@ import org.snmp4j.transport.DefaultUdpTransportMapping;
 /** Loopback v2c Traps into a real SNMPDevice on a hand-made Gateway, asserting the published Traps/ nodes. */
 class SNMPDeviceTrapNodesTest {
     private static final List<String> COUNTERS = List.of("ReceivedCount", "AcceptedCount", "DroppedRateLimitCount",
-            "DroppedQueueFullCount", "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount",
-            "ListenerUnmatchedCount", "ListenerMultiMatchCount");
+            "DroppedQueueFullCount", "DroppedUnlicensedCount", "AuthFailureCount", "DuplicateInformCount", "PendingInformCount",
+            "ListenerUnmatchedCount", "ListenerMultiMatchCount", "RecordDeliveredCount", "RecordDroppedCount",
+            "RecordQueueDepth");
     private static final List<String> LAST = List.of("Sequence", "ReceivedTime", "PduType", "Version", "TrapOid",
             "Source", "AgentAddress", "AgentUpTime", "Varbinds", "Json");
 
@@ -87,6 +88,18 @@ class SNMPDeviceTrapNodesTest {
             assertTrue(fixture.read("Last/" + name).getStatusCode().isGood(), name);
         }
         assertTrue(((String) fixture.value("LocalEngineId")).matches("[0-9a-f]{10,64}"));
+    }
+
+    /** #41: after a Gateway restart the first Device built its nodes before the Trap registry existed. */
+    @Test
+    void firstDeviceAfterGatewayStartShowsTheLocalEngineId() throws Exception {
+        fixture = new SNMPDeviceFixture(true, "public", true, SNMPDeviceConfig.TrapSecurity.COMMUNITY, "", false);
+
+        java.util.Properties stored = new java.util.Properties();
+        try (var reader = java.nio.file.Files.newBufferedReader(fixture.engineIdentityFile())) {
+            stored.load(reader);
+        }
+        assertEquals(stored.getProperty("engineId"), fixture.value("LocalEngineId"));
     }
 
     @Test

@@ -29,6 +29,7 @@ import com.jw.snmpdriver.snmp.trap.TrapCounters;
 import com.jw.snmpdriver.snmp.trap.TrapFilter;
 import com.jw.snmpdriver.snmp.trap.TrapListenerHandle;
 import com.jw.snmpdriver.snmp.trap.TrapListenerRegistry;
+import com.jw.snmpdriver.snmp.trap.TrapNotification;
 import com.jw.snmpdriver.snmp.trap.TrapRecipient;
 import com.jw.snmpdriver.snmp.trap.TrapV3User;
 import org.eclipse.milo.opcua.sdk.core.Reference;
@@ -64,6 +65,8 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     private final TrapDiagnostics trapDiagnostics;
     private final TrapCounters trapCounters = new TrapCounters();
     private final SecretResolver secrets;
+    /** Null when no Record Handler Function is configured: no Records, no Record counts. */
+    private final RecordDelivery recordDelivery;
 
     private final DeviceStatusMachine statusMachine = new DeviceStatusMachine(this::publishStatus);
     private volatile DevicePollHandle pollHandle;
@@ -84,6 +87,12 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
     }
 
     SNMPDevice(DeviceContext context, SNMPDeviceConfig config, ServiceBundle services, SecretResolver secrets) {
+        this(context, config, services, secrets, null);
+    }
+
+    /** Test seam: a non-null {@code recordHandler} replaces the project Script Library call. */
+    SNMPDevice(DeviceContext context, SNMPDeviceConfig config, ServiceBundle services, SecretResolver secrets,
+               RecordHandlerInvoker recordHandler) {
         super(context.getServer());
         this.secrets = secrets;
         this.context = context;
@@ -91,7 +100,13 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         this.services = services;
         this.subscriptionModel = new SubscriptionModel(context.getServer(), this);
         this.diagnostics = new DeviceDiagnostics(this, context);
-        this.trapDiagnostics = TrapDiagnostics.forNodes(this, context, services::licenseVerdict, trapCounters);
+        this.recordDelivery = RecordDelivery.forConfig(context.getName(), config,
+                () -> recordHandler != null
+                        ? recordHandler
+                        : new ScriptRecordHandlerInvoker(context.getGatewayContext()),
+                services::recordExecutor);
+        this.trapDiagnostics = TrapDiagnostics.forNodes(this, context, services::licenseVerdict, trapCounters,
+                recordDelivery);
 
         getLifecycleManager().addLifecycle(subscriptionModel);
         getLifecycleManager().addStartupTask(this::onStartup);
@@ -291,6 +306,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         try {
             createAddressSpace();
             services.ensureStarted();
+            showTrapEngineIdentity();
             acquireTrapListener();
             pollHandle = createPollHandle();
             subscriptionBridge = new SubscriptionBridge(
@@ -396,9 +412,13 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                 Reference.Direction.INVERSE
         ));
         diagnostics.createUnder(root);
+        trapDiagnostics.createUnder(root);
+    }
+
+    /** After {@code ensureStarted}: the first Device of a Gateway start builds its nodes before the registry exists. */
+    private void showTrapEngineIdentity() {
         services.trapRegistry().flatMap(TrapListenerRegistry::engineIdentity).ifPresent(identity ->
                 trapDiagnostics.showEngineIdentity(identity.engineIdHex(), identity.notice()));
-        trapDiagnostics.createUnder(root);
     }
 
     /** Trap failures only degrade the Traps nodes; they never touch Device Status or polling. */
@@ -416,6 +436,9 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             TrapRecipient recipient = createTrapRecipient();
             trapDiagnostics.showConfigNotice(recipient.v3User() != null && !recipient.v3User().receivesTraps()
                     ? TrapV3User.NO_SENDER_ENGINE_ID : "");
+            if (recordDelivery != null) {
+                recordDelivery.start();
+            }
             TrapListenerHandle handle = registry.get().acquire(
                     context.getName(), config.trapBindAddress(), config.trapPort(),
                     trapDiagnostics::refresh, recipient);
@@ -448,7 +471,7 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
             TrapFilter filter = new TrapFilter(config.host(), config.trapSourceAllowlist(), new byte[0],
                     InetAddress::getAllByName);
             return new TrapRecipient(context.getName(), filter, trapCounters,
-                    new TokenBucket(config.trapRateLimitPerSecond()), trapDiagnostics::accept,
+                    new TokenBucket(config.trapRateLimitPerSecond()), this::acceptNotification,
                     trapDiagnostics::notice, config.trapAcceptInform(), user);
         }
         String community = secret(config.trapCommunity());
@@ -458,8 +481,16 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
         TrapFilter filter = new TrapFilter(config.host(), config.trapSourceAllowlist(),
                 community.getBytes(StandardCharsets.UTF_8), InetAddress::getAllByName);
         return new TrapRecipient(context.getName(), filter, trapCounters,
-                new TokenBucket(config.trapRateLimitPerSecond()), trapDiagnostics::accept, trapDiagnostics::notice,
+                new TokenBucket(config.trapRateLimitPerSecond()), this::acceptNotification, trapDiagnostics::notice,
                 config.trapAcceptInform());
+    }
+
+    /** On the listener worker: publish the snapshot, then hand the Record over without waiting for the handler. */
+    private void acceptNotification(TrapNotification notification) {
+        TrapState.Snapshot snapshot = trapDiagnostics.accept(notification);
+        if (recordDelivery != null) {
+            recordDelivery.offer(TrapState.recordJson(context.getName(), snapshot), snapshot.sequence());
+        }
     }
 
     private void releaseTrapListener() {
@@ -479,6 +510,11 @@ public final class SNMPDevice extends ManagedAddressSpaceWithLifecycle implement
                         context.getName(), config.host(), config.port(), config.version(), error
                 );
             }
+        }
+        if (recordDelivery != null) {
+            recordDelivery.stop();
+            // the periodic flush is cancelled: publish the Records dropped by stop() once more
+            trapDiagnostics.flushCounters();
         }
         if (config.trapEnabled()) {
             trapDiagnostics.released();

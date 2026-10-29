@@ -51,6 +51,69 @@ class SNMPDeviceTrapConfigTest {
         assertTrue(config.trapAcceptInform());
         assertEquals("", config.trapSourceAllowlist());
         assertEquals(100, config.trapRateLimitPerSecond());
+        assertEquals("", config.recordHandlerProject());
+        assertEquals("", config.recordHandlerFunction());
+        assertEquals(10_000, config.recordQueueCapacity());
+    }
+
+    @Test
+    void recordQueueCapacityDefaultsToTenThousand() {
+        assertEquals(10_000, SNMPDeviceConfig.defaults().recordQueueCapacity());
+    }
+
+    @Test
+    void rejectsRecordQueueCapacityOutsideOneHundredToOneHundredThousand() throws Exception {
+        for (int capacity : new int[] {0, 99, -1, 100_001}) {
+            assertFieldError("recordQueueCapacity", decode(Map.of("recordQueueCapacity", capacity)));
+        }
+        for (int capacity : new int[] {100, 10_000, 100_000}) {
+            SNMPDeviceConfig config = decode(Map.of("recordQueueCapacity", capacity));
+            assertEquals(capacity, config.recordQueueCapacity());
+            assertEquals(Map.of(), fieldErrors(config), String.valueOf(capacity));
+        }
+    }
+
+    @Test
+    void recordHandlerFieldsDefaultToEmpty() {
+        assertEquals("", SNMPDeviceConfig.defaults().recordHandlerProject());
+        assertEquals("", SNMPDeviceConfig.defaults().recordHandlerFunction());
+    }
+
+    @Test
+    void explicitRecordHandlerValuesAreKept() throws Exception {
+        SNMPDeviceConfig config = decode(Map.of(
+                "recordHandlerProject", "Plant",
+                "recordHandlerFunction", "snmp.handlers.onNotification"));
+
+        assertEquals("Plant", config.recordHandlerProject());
+        assertEquals("snmp.handlers.onNotification", config.recordHandlerFunction());
+    }
+
+    @Test
+    void rejectsRecordHandlerFunctionThatIsNotADottedPath() throws Exception {
+        for (String function : new String[] {"onNotification", "snmp..onNotification", "1snmp.handler",
+                "snmp.handler.", ".snmp.handler", "snmp handlers.on", "snmp.on()", "snmp.on-off", "snmp/on"}) {
+            assertFieldError("recordHandlerFunction", decode(Map.of("recordHandlerFunction", function)));
+        }
+        for (String function : new String[] {"", "  ", "snmp.handlers.onNotification", "a.b", "_x.y_1",
+                " snmp.handlers.onNotification "}) {
+            assertEquals(Map.of(), fieldErrors(decode(Map.of("recordHandlerFunction", function,
+                    "recordHandlerProject", function.isBlank() ? "" : "Plant"))), function);
+        }
+    }
+
+    @Test
+    void recordHandlerProjectAndFunctionMustBeConfiguredTogether() throws Exception {
+        for (String blank : new String[] {"", "  "}) {
+            assertFieldError("recordHandlerProject", decode(Map.of(
+                    "recordHandlerProject", blank, "recordHandlerFunction", "snmp.handlers.onNotification")));
+            assertFieldError("recordHandlerFunction", decode(Map.of(
+                    "recordHandlerProject", "Plant", "recordHandlerFunction", blank)));
+        }
+        JsonObject json = extensionPoint.encode(SNMPDeviceConfig.defaults()).getAsJsonObject();
+        json.addProperty("recordHandlerFunction", "snmp.handlers.onNotification");
+        json.add("recordHandlerProject", com.inductiveautomation.ignition.common.gson.JsonNull.INSTANCE);
+        assertFieldError("recordHandlerProject", extensionPoint.decode(json));
     }
 
     @Test
@@ -93,12 +156,37 @@ class SNMPDeviceTrapConfigTest {
     }
 
     @Test
-    void rejectsMalformedSenderEngineId() throws Exception {
-        for (String engineId : new String[] {"zz00112233", "0011223", "00112233", "00".repeat(33)}) {
-            assertFieldError("trapSenderEngineId", decode(Map.of("trapSenderEngineId", engineId)));
+    void rejectsMalformedSenderEngineIdOnUsmTraps() throws Exception {
+        for (String engineId : new String[] {"zz00112233", "0011223", "00112233", "00".repeat(33), "0x", "::"}) {
+            assertFieldError("trapSenderEngineId", decode(usmTraps(engineId)));
         }
-        assertEquals(Map.of(), fieldErrors(decode(Map.of("trapSenderEngineId", "80001F8880AABBCCDD"))));
-        assertEquals(Map.of(), fieldErrors(decode(Map.of("trapSenderEngineId", "00".repeat(32)))));
+        assertEquals(Map.of(), fieldErrors(decode(usmTraps("80001F8880AABBCCDD"))));
+        assertEquals(Map.of(), fieldErrors(decode(usmTraps("00".repeat(32)))));
+        assertEquals(Map.of(), fieldErrors(decode(usmTraps(""))));
+    }
+
+    /** As net-snmp, Wireshark and MIB browsers print it: spaces, colons, a 0x prefix, surrounding blanks. */
+    @Test
+    void acceptsSenderEngineIdAsToolsPrintIt() throws Exception {
+        for (String engineId : new String[] {"80 00 1F 88 80 AA BB CC DD", "80:00:1f:88:80:aa:bb:cc:dd",
+                "0x80001F8880AABBCCDD", " 80001f8880aabbccdd ", "0X80 00 1F 88 80 AA BB CC DD\n"}) {
+            assertEquals(Map.of(), fieldErrors(decode(usmTraps(engineId))), engineId);
+            assertEquals("80001F8880AABBCCDD", SNMPDeviceConfig.normalizeEngineId(engineId).toUpperCase(), engineId);
+        }
+    }
+
+    /** The field only matters to USM Traps; a stale value must not block saving any other change. */
+    @Test
+    void senderEngineIdIsNotCheckedUnlessTrapsUseUsm() throws Exception {
+        assertEquals(Map.of(), fieldErrors(decode(Map.of("trapSenderEngineId", "not hex"))));
+        assertEquals(Map.of(), fieldErrors(decode(Map.of("trapEnabled", false, "trapSecurity", "USM",
+                "trapSenderEngineId", "not hex"))));
+        assertEquals(Map.of(), fieldErrors(decode(Map.of("trapEnabled", true, "trapCommunity", secret(),
+                "trapSenderEngineId", "not hex"))));
+    }
+
+    private static Map<String, Object> usmTraps(String engineId) {
+        return Map.of("trapEnabled", true, "trapSecurity", "USM", "trapSenderEngineId", engineId);
     }
 
     @Test

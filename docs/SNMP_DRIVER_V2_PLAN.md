@@ -25,7 +25,7 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 | D4 | **162 端口**：可配置，默认 162。绑定失败时只有 Trap 功能进入 Degraded，不影响轮询，LastError 写明原因与处置办法。Linux 首推让 Ignition 监听高端口（如 10162），再用 nftables 把 162 转发到 10162，不推荐 setcap；Windows 停用系统 SNMP Trap 服务；Docker 用 `-p 162:10162/udp`。同一端口的多个设备共享一个 listener；同一 bind 地址/端口的参数有冲突时，在保存时校验报错。 |
 | D5 | Event Streams、MIB、Walk/Table/Browse、多 varbind SET/RowStatus、SQL TrapStore 都放在 B1 之后，只列入路线图。 |
 
-### 1.1 grilling 决策（Q1–Q18）
+### 1.1 grilling 决策（Q1–Q38）
 
 以下决策由 grilling 确定，按原文写入，不做改写；正文各节已同步：
 
@@ -60,6 +60,15 @@ v1 分析给出 A/B/C 三套方案，推荐 B 分期交付。两份复核都同�
 | Q27 | M1c 本地引擎身份：身份文件记录机器指纹哈希，按 License 比例匹配规则检测克隆/换机，判定后重新生成 engineID（boots 从 1）并保留 `.cloned-<ts>`；采集不到标识时不判定；恢复备份只做 boots+1，手册说明 `notInTimeWindow` 处置；指纹由模块自动管理。 | §4.6；`docs/adr/0009-trap-engine-identity-clone-detection.md` |
 | Q28 | M1c 用户与安全：未配 `trapSenderEngineId` 的 v3 设备只收 Inform、`LastError` 说明；同 listener securityName 冲突只做运行期检查，冲突设备全部 Degraded 并列出设备名，不阻止保存；接收 noAuthNoPriv v3 Trap，手册标注安全等级同 v2c。 | §4.6；ADR 0003、0007 |
 | Q29 | M1c 交付沿用 M1b：spec Issue → 子票 → 集成分支 `m1c/v3-notifications` → Orca worker → 推送前 Codex 评审 → bump `1.1.0-beta2` 冒烟 → PR。M1-SET（§5.1.1）独立成票，M1d 前完成，不阻塞 M1c。 | §5 |
+| Q30 | M1d net-snmp 来源：在 igdev 的 Docker 网络中另起 net-snmp 容器向 Gateway 容器 IP 发包，主机不安装 net-snmp。 | §6.3 |
+| Q31 | Docker 端口映射实测一次：临时 compose override 发布 UDP 162（`-p 162:10162/udp`），验证源 IP 是否保留，测完撤掉，结论写进端口指引。 | §4.10、§6.3 |
+| Q32 | 备份恢复用真实 `.gwbk`，“恢复 local”与“不恢复 local”两种都测，验证 boots 行为与 `notInTimeWindow` 处置；克隆优先用第二个 igdev 实例验证 engineID 重新生成，过重则改指纹模拟。会覆盖 Gateway 数据，测前完整备份、测后恢复。 | §4.6、§6.3；ADR 0009 |
+| Q33 | 风暴测试采用 §6.4 阈值，在本机 igdev 上跑；结果作为参考值记录并注明硬件条件。 | §6.4 |
+| Q34 | 发布 1.1.0 范围：agent 负责 `moduleVersion=1.1.0`、tag `v1.1.0`、GitHub Release（只含发布说明，不附 `.modl`）；模块签名与附加 `.modl` 由用户人工完成。 | §5.1 |
+| Q35 | 单独一张小票修复模块启动后数秒内 `Status` 短暂显示 Unlicensed 的问题，排在 M1d 首位，避免干扰升级测试断言。 | §5.1 |
+| Q36 | M1d 范围内的 igdev 系统测试、升级测试、风暴测试一次性授权，不再逐次询问（覆盖 Q16 在 M1d 内的限制）；删除或覆盖用户已有 Gateway 数据、执行 `igdev gateway reset` 前仍需询问。 | §5.1、§6 |
+| Q37 | M1d 交付：spec Issue → 子票 → 集成分支 `m1d/release`。子票顺序：① Status 小修复 ② net-snmp 系统测试矩阵（含端口映射）③ 升级、恢复与克隆测试 ④ 风暴测试 ⑤ 文档（可与 ②–④ 并行）⑥ M1-SET（#32）⑦ 发布。用到 Gateway 的票串行执行。 | §5、§5.1.1 |
+| Q38 | 测试产物：脚本提交到 `system-test/`，报告放 `docs/test-reports/1.1.0/`，均不含 credentials 与 Gateway 导出文件。 | §6 |
 
 ### 1.2 ADR
 
@@ -510,7 +519,7 @@ Docker: publish -p 162:10162/udp and set Trap Port to 10162.
 
 **退出条件**：
 - M0：§3 中 M0 范围（Q13）各项验收全部通过，且 `./gradlew :gateway:test` 通过（worker 已获长期授权运行，Q16）。
-- M1：§6 系统测试矩阵全部通过，风暴测试达到 §6.4 的阈值；**硬性条件**：1.0.0 设备配置在 igdev 导入并升级到 1.1.0 后不改即可加载，Trap 默认关闭，轮询不变（Q12）。系统测试与风暴测试每次执行前需询问用户（Q16）。
+- M1：§6 系统测试矩阵全部通过，风暴测试达到 §6.4 的阈值；**硬性条件**：1.0.0 设备配置在 igdev 导入并升级到 1.1.0 后不改即可加载，Trap 默认关闭，轮询不变（Q12）。系统测试与风暴测试每次执行前需询问用户（Q16）。M1d 范围内改为一次性授权，覆盖或删除 Gateway 数据前仍需询问（Q36）。
 
 ### 5.1.1 新增后续步骤：M1-SET，Designer 写入失败调查与修复
 
@@ -520,7 +529,7 @@ Docker: publish -p 162:10162/udp and set Trap Port to 10162.
 - **关联对象**：Device `M0_E2E_V2C`，动态路径 `RW.Integer32/1.3.6.1.4.1.53864.1.0`；手动检查入口为 Designer → Gateway → OPC UA → SNMP SET → 模拟设备 → 轮询回读。
 - **证据边界**：以上错误来自用户报告，本次未复现；尚未确定写请求是否到达 Gateway、OPC UA 或模拟设备，也没有证明是 Trap 引入的回归。设备 Running、GET 成功或旧 Quick Client 写入成功，都不能替代本次 Designer 写入验收。
 - **步骤范围**：保留复现条件并定位首个失败环节，按证据修复模块、配置或测试环境；恢复合法 V2C Integer32 写入与回读，并保留读写权限和 License 检查。
-- **排期建议，待确认**：独立于 M1b Notification 任务，不作为 M1c 实现的前置；在 M1d 发布验收前完成。只建立一个可独立验收的工作项，不按协议层横向拆票；工期待定位后估算，不修改现有工期合计。
+- **排期（Q37 已定）**：作为 M1d 第 ⑥ 张子票，在发布票之前完成。原建议：独立于 M1b Notification 任务，不作为 M1c 实现的前置；在 M1d 发布验收前完成。只建立一个可独立验收的工作项，不按协议层横向拆票；工期待定位后估算，不修改现有工期合计。
 - **验收建议，待确认**：以真实 Designer 写入及回读为最高测试入口；用现有 Device/SNMP 请求边界补充最小自动回归，验证修复前失败、修复后通过。补查 Trap 关闭及开启时轮询/SET 行为，确认 Notification 仍保持只读语义。
 - **执行限制**：当前只记录和准备 Issue，不实施修复，不执行 Verification。Issue 草稿待技能规定的测试入口及拆票确认后发布，标签 `ready-for-agent`、`wayfinder:task`。
 

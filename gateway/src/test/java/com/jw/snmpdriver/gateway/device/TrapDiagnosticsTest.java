@@ -97,6 +97,14 @@ class TrapDiagnosticsTest {
     }
 
     @Test
+    void boundListenerBeforeLicenseIsVerifiedDoesNotShowUnlicensed() {
+        TrapDiagnostics pending = new TrapDiagnostics(nodes::put, () -> LicenseGate.Verdict.PENDING);
+        pending.track(registry().acquire("dev-a", "0.0.0.0", 10162, pending::refresh));
+
+        assertEquals("Listening", nodes.get("Status"));
+    }
+
+    @Test
     void degradedOutranksUnlicensed() {
         TrapDiagnostics licensed = new TrapDiagnostics(nodes::put, () -> LicenseGate.Verdict.NOT_AVAILABLE);
         failures = 1;
@@ -423,6 +431,55 @@ class TrapDiagnosticsTest {
 
         assertEquals("80001f01", nodes.get("LocalEngineId"));
         assertEquals("", nodes.get("LastError"));
+    }
+
+    private TrapDiagnostics withRecordError(java.util.concurrent.atomic.AtomicReference<String> recordError) {
+        return new TrapDiagnostics(nodes::put, () -> LicenseGate.Verdict.LICENSED, Map.of(), recordError::get);
+    }
+
+    @Test
+    void recordErrorChangeKeepsTheReceiveNotice() {
+        java.util.concurrent.atomic.AtomicReference<String> recordError =
+                new java.util.concurrent.atomic.AtomicReference<>("");
+        TrapDiagnostics withRecords = withRecordError(recordError);
+        withRecords.track(registry().acquire("dev", "127.0.0.1", 10162, withRecords::refresh));
+        withRecords.notice("认证摘要不匹配");
+
+        recordError.set("Record handler boom");
+        withRecords.flushCounters();
+        assertEquals("认证摘要不匹配 Record handler boom", text("LastError"));
+
+        recordError.set("");
+        withRecords.flushCounters();
+        assertEquals("认证摘要不匹配", text("LastError"));
+    }
+
+    @Test
+    void recordErrorIsPublishedWhileNoListenerIsTracked() {
+        java.util.concurrent.atomic.AtomicReference<String> recordError =
+                new java.util.concurrent.atomic.AtomicReference<>("");
+        TrapDiagnostics withRecords = withRecordError(recordError);
+        withRecords.showUnavailable("注册表不可用");
+
+        recordError.set("Record handler boom");
+        withRecords.flushCounters();
+        assertTrue(text("LastError").startsWith("注册表不可用 "), text("LastError"));
+        assertTrue(text("LastError").endsWith(" Record handler boom"), text("LastError"));
+
+        withRecords.showDisabled();
+        recordError.set("Record 队列已满");
+        withRecords.flushCounters();
+        assertEquals("Record 队列已满", text("LastError"));
+    }
+
+    @Test
+    void receiveNoticeKeepsTheConfigNotice() {
+        TrapDiagnostics withConfig = new TrapDiagnostics(nodes::put);
+        withConfig.showConfigNotice("未配置 Trap Sender Engine ID，不接收 v3 Trap。");
+        withConfig.track(registry().acquire("dev", "127.0.0.1", 10162, withConfig::refresh));
+
+        withConfig.notice("community 不匹配");
+        assertEquals("community 不匹配 未配置 Trap Sender Engine ID，不接收 v3 Trap。", text("LastError"));
     }
 
     @Test

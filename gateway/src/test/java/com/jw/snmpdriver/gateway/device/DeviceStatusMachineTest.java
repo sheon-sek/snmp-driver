@@ -9,6 +9,11 @@ import com.jw.snmpdriver.snmp.runtime.SnmpNoResponseException;
 import com.jw.snmpdriver.snmp.runtime.SnmpProtocolException;
 import com.jw.snmpdriver.snmp.runtime.SnmpTransportUnavailableException;
 import com.jw.snmpdriver.snmp.runtime.SnmpValueException;
+import com.jw.ignition.license.enums.LicenseStatusCode;
+import com.jw.ignition.license.model.LicenseStatusModel;
+import com.jw.snmpdriver.snmp.runtime.LicenseGate;
+import com.jw.snmpdriver.snmp.runtime.LicensedSnmpRequestClient;
+import com.jw.snmpdriver.snmp.runtime.SnmpRequestClient;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -152,5 +157,57 @@ class DeviceStatusMachineTest {
 
         assertEquals("Errored", state.status());
         assertEquals(List.of("Errored"), published);
+    }
+
+    @Test
+    void pollFailureBeforeLicenseIsVerifiedDoesNotShowUnlicensed() {
+        state.activity(generation, 1);
+
+        state.failure(generation, pollFailure(LicenseStatusCode.UNVERIFIED), 1);
+
+        assertEquals("Connecting", state.status());
+        assertEquals(List.of("Connecting"), published);
+    }
+
+    @Test
+    void pollFailureWithMissingLicenseStillShowsUnlicensed() {
+        state.activity(generation, 1);
+
+        state.failure(generation, pollFailure(LicenseStatusCode.MISSING_FILE), 1);
+
+        assertEquals("Unlicensed", state.status());
+    }
+
+    private static Throwable pollFailure(LicenseStatusCode code) {
+        LicenseStatusModel status = LicenseStatusModel.empty();
+        status.code = code;
+        LicensedSnmpRequestClient client = new LicensedSnmpRequestClient(new UnreachableClient(), new LicenseGate(() -> status));
+        Throwable[] failure = new Throwable[1];
+        client.getBatch(null, List.of()).whenComplete((result, error) -> failure[0] = error);
+        return failure[0];
+    }
+
+    private static final class UnreachableClient implements SnmpRequestClient {
+        @Override
+        public java.util.concurrent.CompletionStage<com.jw.snmpdriver.snmp.runtime.BatchResult> getBatch(
+                com.jw.snmpdriver.snmp.runtime.SnmpEndpoint endpoint,
+                List<com.jw.snmpdriver.snmp.address.NumericOid> oids) {
+            throw new AssertionError("License gate must block the request");
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<com.jw.snmpdriver.snmp.runtime.SetResult> set(
+                com.jw.snmpdriver.snmp.runtime.SnmpEndpoint endpoint,
+                com.jw.snmpdriver.snmp.address.NumericOid oid, org.snmp4j.smi.Variable value) {
+            throw new AssertionError("License gate must block the request");
+        }
+
+        @Override
+        public void start() {
+        }
+
+        @Override
+        public void close() {
+        }
     }
 }

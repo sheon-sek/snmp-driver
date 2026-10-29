@@ -31,6 +31,9 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.TimestampsToReturn;
 import org.eclipse.milo.opcua.stack.core.types.structured.ReadValueId;
+import org.eclipse.milo.opcua.stack.core.types.structured.WriteValue;
+import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
+import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
 
 /**
@@ -43,8 +46,11 @@ final class SNMPDeviceFixture implements AutoCloseable {
 
     final int trapPort;
     final SNMPDevice device;
+    private final GatewayContext gateway;
+    private final List<SNMPDevice> extraDevices = new CopyOnWriteArrayList<>();
     private final ServiceBundle bundle = new ServiceBundle();
     private final AtomicInteger nextItemId = new AtomicInteger();
+    private boolean deviceStopped;
 
     /** The Gateway is faked, so the Trap Community is resolved by the device's SecretResolver test seam. */
     SNMPDeviceFixture(boolean trapEnabled, String trapCommunity, boolean licensed) throws Exception {
@@ -59,28 +65,126 @@ final class SNMPDeviceFixture implements AutoCloseable {
     /** {@code trapSenderEngineId} applies to USM: the v3 user "probe" (noAuthNoPriv) is localized to it. */
     SNMPDeviceFixture(boolean trapEnabled, String trapCommunity, boolean licensed,
                       SNMPDeviceConfig.TrapSecurity trapSecurity, String trapSenderEngineId) throws Exception {
+        this(trapEnabled, trapCommunity, licensed, trapSecurity, trapSenderEngineId, true);
+    }
+
+    /**
+     * {@code servicesStarted=false} is a Gateway start: this Device is the first one, so its own startup starts
+     * the shared services (and creates the Trap registry) after building its address space.
+     */
+    SNMPDeviceFixture(boolean trapEnabled, String trapCommunity, boolean licensed,
+                      SNMPDeviceConfig.TrapSecurity trapSecurity, String trapSenderEngineId, boolean servicesStarted)
+            throws Exception {
         trapPort = freeUdpPort();
-        GatewayContext gateway = gatewayContext();
+        gateway = gatewayContext();
+        var setup = ServiceBundle.class.getDeclaredMethod("setupProcess", GatewayContext.class);
+        setup.setAccessible(true);
+        setup.invoke(bundle, gateway);
+        if (servicesStarted) {
+            bundle.ensureStarted();
+            license(licensed);
+        }
+
+        OpcUaServer server = new OpcUaServer(OpcUaServerConfig.builder().build(), null);
+        SNMPDeviceConfig config = trapConfig(trapEnabled, trapPort, trapSecurity, trapSenderEngineId, "", "",
+                SNMPDeviceConfig.defaults().recordQueueCapacity());
+        device = new SNMPDevice(deviceContext(server, gateway, "probe"), config, bundle, secret -> trapCommunity);
+        device.startup();
+        if (!servicesStarted) {
+            license(licensed);
+        }
+    }
+
+    /**
+     * A licensed v2c ("public") Trap Device whose Record handler is {@code recordHandler}; an empty
+     * {@code recordHandlerFunction} leaves Record Delivery unconfigured.
+     */
+    SNMPDeviceFixture(String recordHandlerFunction, RecordHandlerInvoker recordHandler) throws Exception {
+        this(recordHandlerFunction, recordHandler, SNMPDeviceConfig.defaults().recordQueueCapacity());
+    }
+
+    /** As above with the given Record Queue Capacity; the fixture skips save-time validation, so any size works. */
+    SNMPDeviceFixture(String recordHandlerFunction, RecordHandlerInvoker recordHandler, int recordQueueCapacity)
+            throws Exception {
+        trapPort = freeUdpPort();
+        gateway = gatewayContext();
         var setup = ServiceBundle.class.getDeclaredMethod("setupProcess", GatewayContext.class);
         setup.setAccessible(true);
         setup.invoke(bundle, gateway);
         bundle.ensureStarted();
-        license(licensed);
+        license(true);
+        device = startDevice("probe", recordHandlerFunction, recordHandler, recordQueueCapacity);
+    }
 
+    /** Another Device on the same Gateway, Trap port and source, so every Notification reaches both. */
+    SNMPDevice addDevice(String name, String recordHandlerFunction, RecordHandlerInvoker recordHandler) {
+        SNMPDevice other = startDevice(name, recordHandlerFunction, recordHandler,
+                SNMPDeviceConfig.defaults().recordQueueCapacity());
+        extraDevices.add(other);
+        return other;
+    }
+
+    /** Stops the main Device as a configuration save, disable or module reload would; {@link #close} skips it. */
+    void stopDevice() {
+        if (!deviceStopped) {
+            deviceStopped = true;
+            device.shutdown();
+        }
+    }
+
+    private SNMPDevice startDevice(String name, String recordHandlerFunction, RecordHandlerInvoker recordHandler,
+                                   int recordQueueCapacity) {
         OpcUaServer server = new OpcUaServer(OpcUaServerConfig.builder().build(), null);
-        // V3 + NO_AUTH_NO_PRIV keeps the polling side free of Secrets
+        SNMPDeviceConfig config = trapConfig(true, trapPort, SNMPDeviceConfig.TrapSecurity.COMMUNITY, "",
+                "recordProject", recordHandlerFunction, recordQueueCapacity);
+        SNMPDevice started = new SNMPDevice(deviceContext(server, gateway, name), config, bundle,
+                secret -> "public", recordHandler);
+        started.startup();
+        return started;
+    }
+
+    /** V3 + NO_AUTH_NO_PRIV keeps the polling side free of Secrets. */
+    private static SNMPDeviceConfig trapConfig(boolean trapEnabled, int trapPort,
+                                               SNMPDeviceConfig.TrapSecurity trapSecurity, String trapSenderEngineId,
+                                               String recordHandlerProject, String recordHandlerFunction,
+                                               int recordQueueCapacity) {
         SNMPDeviceConfig d = SNMPDeviceConfig.defaults();
-        SNMPDeviceConfig config = new SNMPDeviceConfig("127.0.0.1", 161, d.ipFamily(), SNMPDeviceConfig.Version.V3,
+        return new SNMPDeviceConfig("127.0.0.1", 161, d.ipFamily(), SNMPDeviceConfig.Version.V3,
                 null, null, "probe", SNMPDeviceConfig.SecurityLevel.NO_AUTH_NO_PRIV, d.authProtocol(), null,
                 d.privacyProtocol(), null, "", d.accessMode(), d.timeoutMillis(), d.retries(), d.maxOidsPerRequest(),
                 d.maxRequestBytes(), d.maxInflightPerDevice(), trapEnabled, "127.0.0.1", trapPort,
-                trapSecurity, null, trapSenderEngineId, true, "", 1000);
-        device = new SNMPDevice(deviceContext(server, gateway), config, bundle, secret -> trapCommunity);
+                trapSecurity, null, trapSenderEngineId, true, "", 1000,
+                recordHandlerProject, recordHandlerFunction, recordQueueCapacity);
+    }
+
+    /** A licensed Device with the caller's polling config; {@code secrets} supplies every SecretConfig plaintext. */
+    SNMPDeviceFixture(SNMPDeviceConfig config, SNMPDevice.SecretResolver secrets) throws Exception {
+        trapPort = config.trapPort();
+        gateway = gatewayContext();
+        var setup = ServiceBundle.class.getDeclaredMethod("setupProcess", GatewayContext.class);
+        setup.setAccessible(true);
+        setup.invoke(bundle, gateway);
+        bundle.ensureStarted();
+        license(true);
+        OpcUaServer server = new OpcUaServer(OpcUaServerConfig.builder().build(), null);
+        device = new SNMPDevice(deviceContext(server, gateway, "probe"), config, bundle, secrets);
         device.startup();
+    }
+
+    /** Writes the Value attribute of a dynamic Item Path the way the OPC UA server does. */
+    StatusCode writePath(String itemPath, Object value) {
+        WriteValue write = new WriteValue(new NodeId(NAMESPACE, "[probe]" + itemPath), AttributeId.Value.uid(), null,
+                new DataValue(new Variant(value)));
+        return device.write(null, List.of(write)).get(0);
     }
 
     /** Current value of a node under {@code [Device]/Traps/}, e.g. {@code "Last/Json"}. */
     DataValue read(String trapsPath) {
+        return read(device, trapsPath);
+    }
+
+    /** As {@link #read(String)} for any Device of this fixture. */
+    static DataValue read(SNMPDevice device, String trapsPath) {
         UaVariableNode node = (UaVariableNode) device.getNodeManager()
                 .getNode(new NodeId(NAMESPACE, "Traps/" + trapsPath))
                 .orElseThrow(() -> new AssertionError("missing node Traps/" + trapsPath));
@@ -134,19 +238,29 @@ final class SNMPDeviceFixture implements AutoCloseable {
     }
 
     /** Swaps the cached License status that {@code ServiceBundle.licenseVerdict()} reads. */
-    @SuppressWarnings("unchecked")
     void license(boolean licensed) throws Exception {
+        license(licensed ? LicenseStatusCode.LICENSED : LicenseStatusCode.MISSING_FILE);
+    }
+
+    @SuppressWarnings("unchecked")
+    void license(LicenseStatusCode code) throws Exception {
         Field current = com.jw.ignition.license.state.CachedLicenseState.class.getDeclaredField("current");
         current.setAccessible(true);
         LicenseStatusModel status = new LicenseStatusModel();
-        status.licensed = licensed;
-        status.code = licensed ? LicenseStatusCode.LICENSED : LicenseStatusCode.MISSING_FILE;
+        status.licensed = code == LicenseStatusCode.LICENSED;
+        status.code = code;
         ((AtomicReference<LicenseStatusModel>) current.get(bundle.license().service().cachedState())).set(status);
+    }
+
+    /** Startup validation has not reached a verdict yet. */
+    void pendingLicense() throws Exception {
+        license(LicenseStatusCode.UNVERIFIED);
     }
 
     @Override
     public void close() {
-        device.shutdown();
+        extraDevices.forEach(SNMPDevice::shutdown);
+        stopDevice();
         bundle.stop();
     }
 
@@ -162,16 +276,16 @@ final class SNMPDeviceFixture implements AutoCloseable {
         return proxy(GatewayContext.class, dataDir);
     }
 
-    private static DeviceContext deviceContext(OpcUaServer server, GatewayContext gateway) {
+    private static DeviceContext deviceContext(OpcUaServer server, GatewayContext gateway, String name) {
         NodeId root = new NodeId(NAMESPACE, "root");
         return (DeviceContext) Proxy.newProxyInstance(DeviceContext.class.getClassLoader(),
                 new Class<?>[] {DeviceContext.class}, (p, m, a) -> switch (m.getName()) {
                     case "getServer" -> server;
-                    case "getName" -> "probe";
+                    case "getName" -> name;
                     case "getNamespaceIndex" -> NAMESPACE;
-                    case "getNamespaceUri" -> "urn:probe";
+                    case "getNamespaceUri" -> "urn:" + name;
                     case "getRootNodeId" -> root;
-                    case "getDeviceNodeId" -> new NodeId(NAMESPACE, "probe");
+                    case "getDeviceNodeId" -> new NodeId(NAMESPACE, name);
                     case "getGatewayContext" -> gateway;
                     case "getSubscriptionModel" -> subscriptionModel();
                     case "nodeId" -> new NodeId(NAMESPACE, String.valueOf(a[0]));

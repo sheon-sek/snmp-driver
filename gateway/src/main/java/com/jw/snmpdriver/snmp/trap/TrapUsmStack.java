@@ -4,7 +4,12 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.snmp4j.MessageDispatcher;
+import org.snmp4j.MutablePDU;
 import org.snmp4j.TransportStateReference;
+import org.snmp4j.mp.MutableStateReference;
+import org.snmp4j.mp.PduHandle;
+import org.snmp4j.smi.Address;
 import org.snmp4j.asn1.BERInputStream;
 import org.snmp4j.asn1.BEROutputStream;
 import org.snmp4j.mp.CounterSupport;
@@ -59,6 +64,19 @@ public final class TrapUsmStack {
     private final Map<OctetString, Integer> informUsers = new HashMap<>();
     /** How USM's last rejection on this transport thread is to be reported; read by the failure listener. */
     private final ThreadLocal<Rejection> rejection = new ThreadLocal<>();
+    /** Receives the rejections SNMP4J's dispatcher drops without an AuthenticationFailureEvent. */
+    private volatile SilentRejectionListener silentRejections;
+    /** A silent USM rejection on this transport thread, handed from USM to MPv3, which knows the sender. */
+    private final ThreadLocal<SilentRejection> silentRejection = new ThreadLocal<>();
+
+    private record SilentRejection(int status, Rejection kind) {
+    }
+
+    /** A USM rejection the dispatcher reports to nobody (see {@link #isSilentInDispatcher}). */
+    @FunctionalInterface
+    public interface SilentRejectionListener {
+        void rejected(Address peer, int status, Rejection rejection);
+    }
 
     /** What a USM rejection was, for counting it. */
     public enum Rejection {
@@ -108,13 +126,20 @@ public final class TrapUsmStack {
                                           StatusInformation statusInfo) throws IOException {
                 incomingEngine.remove();
                 rejection.remove();
+                silentRejection.remove();
                 int status = super.processIncomingMsg(snmpVersion, maxMessageSize, parameters, model, securityLevel,
                         wholeMsg, transport, securityEngineID, securityName, scopedPDU, maxSizeResponseScopedPDU,
                         securityStateReference, statusInfo);
                 if (status == SnmpConstants.SNMPv3_USM_OK) {
                     incomingEngine.set(securityEngineID.getValue());
                 } else {
-                    rejection.set(classify(status, securityLevel, securityEngineID, (UsmSecurityParameters) parameters));
+                    Rejection kind = classify(status, securityLevel, securityEngineID, (UsmSecurityParameters) parameters);
+                    if (isSilentInDispatcher(status)) {
+                        // reported by MPv3 below, which knows the sender's address
+                        silentRejection.set(new SilentRejection(status, kind));
+                    } else {
+                        rejection.set(kind);
+                    }
                 }
                 return status;
             }
@@ -127,7 +152,44 @@ public final class TrapUsmStack {
             usm.getTimeTable().addEntry(new UsmTimeEntry(localEngine, engineBoots, 0));
         }
         mpv3 = new MPv3(localEngineId, null, protocols, new SecurityModels().addSecurityModel(usm),
-                CounterSupport.getInstance());
+                CounterSupport.getInstance()) {
+            @Override
+            public <A extends Address> int prepareDataElements(MessageDispatcher dispatcher, A address,
+                                                               BERInputStream wholeMsg,
+                                                               TransportStateReference transport,
+                                                               Integer32 mpModel, Integer32 securityModel,
+                                                               OctetString securityName, Integer32 securityLevel,
+                                                               MutablePDU pdu, PduHandle handle,
+                                                               Integer32 maxSizeResponseScopedPDU,
+                                                               StatusInformation statusInfo,
+                                                               MutableStateReference<A> stateReference) {
+                silentRejection.remove();
+                int status = super.prepareDataElements(dispatcher, address, wholeMsg, transport, mpModel,
+                        securityModel, securityName, securityLevel, pdu, handle, maxSizeResponseScopedPDU,
+                        statusInfo, stateReference);
+                // report the dispatcher's peer: on the Gateway transport.getAddress() is not the sender
+                SilentRejectionListener listener = silentRejections;
+                SilentRejection usmFailure = silentRejection.get();
+                silentRejection.remove();
+                if (usmFailure != null) {
+                    if (listener != null) {
+                        listener.rejected(address, usmFailure.status(), usmFailure.kind());
+                    }
+                    return status;
+                }
+                // USM verified the digest, yet the decrypted scoped PDU does not parse: the privacy key is wrong.
+                // The dispatcher reports SNMP_MP_PARSE_ERROR to no AuthenticationFailureListener.
+                byte[] engine = incomingEngine.get();
+                if (status == SnmpConstants.SNMP_MP_PARSE_ERROR && engine != null && listener != null
+                        && securityLevel.getValue() == org.snmp4j.security.SecurityLevel.AUTH_PRIV) {
+                    incomingEngine.remove();
+                    listener.rejected(address, SnmpConstants.SNMPv3_USM_DECRYPTION_ERROR,
+                            informEnabled && localEngine.equals(new OctetString(engine))
+                                    ? Rejection.LOCAL_ENGINE : Rejection.OTHER);
+                }
+                return status;
+            }
+        };
     }
 
     /** The engineID USM authenticated the current transport thread's message with; null when none. */
@@ -135,6 +197,20 @@ public final class TrapUsmStack {
         byte[] engine = incomingEngine.get();
         incomingEngine.remove();
         return engine;
+    }
+
+    /**
+     * SNMP4J 3.12 {@code MessageDispatcherImpl} fires {@code AuthenticationFailureEvent} only for a fixed set of
+     * statuses; a wrong privacy passphrase ends in a decryption error, a USM parse error or (most often, since
+     * DES/AES decrypt garbage without error) an MPv3 scoped-PDU parse error, all outside that set and otherwise
+     * dropped uncounted. The MPv3 case is caught in {@code prepareDataElements}.
+     */
+    static boolean isSilentInDispatcher(int status) {
+        return status == SnmpConstants.SNMPv3_USM_DECRYPTION_ERROR || status == SnmpConstants.SNMPv3_USM_PARSE_ERROR;
+    }
+
+    public void setSilentRejectionListener(SilentRejectionListener listener) {
+        silentRejections = listener;
     }
 
     /** How to report the message USM rejected on this transport thread; clears the record. */

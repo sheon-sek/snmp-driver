@@ -1,0 +1,7 @@
+{
+  "title": "st-records",
+  "description": "SNMP Driver system-test fixture",
+  "enabled": true,
+  "inheritable": false,
+  "parent": ""
+}
